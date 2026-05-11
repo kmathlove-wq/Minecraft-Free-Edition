@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>짭 마인크래프트</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div id="blocker">
+        <div id="instructions">
+            <p style="font-size:36px">클릭하여 시작</p>
+            <p>(W, A, S, D = 이동, MOUSE = 둘러보기)</p>
+        </div>
+    </div>
+    <div id="crosshair"></div>
+    <div id="inventory">
+        <div class="slot active" data-slot="0" data-type="grass"></div>
+        <div class="slot" data-slot="1" data-type="dirt"></div>
+        <div class="slot" data-slot="2" data-type="stone"></div>
+        <div class="slot" data-slot="3" data-type="wood"></div>
+        <div class="slot" data-slot="4" data-type="leaves"></div>
+        <div class="slot" data-slot="5"></div>
+        <div class="slot" data-slot="6"></div>
+        <div class="slot" data-slot="7"></div>
+        <div class="slot" data-slot="8"></div>
+    </div>
+
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+                "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+            }
+        }
+    </script>
+    <script type="module" src="main.js"></script>
+</body>
+</html>

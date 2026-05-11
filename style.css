@@ -1,0 +1,90 @@
+body {
+    margin: 0;
+    overflow: hidden;
+    font-family: Arial, sans-serif;
+}
+
+#blocker {
+    position: absolute;
+    width: 100%;
+    height: 100%;
+    background-color: rgba(0,0,0,0.5);
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    color: white;
+    text-align: center;
+    z-index: 10;
+    cursor: pointer;
+}
+
+#instructions {
+    pointer-events: none;
+}
+
+#crosshair {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 20px;
+    height: 20px;
+    border: 2px solid white;
+    border-radius: 50%;
+    transform: translate(-50%, -50%);
+    z-index: 5;
+    pointer-events: none;
+}
+
+#crosshair::before, #crosshair::after {
+    content: '';
+    position: absolute;
+    background-color: white;
+}
+
+#crosshair::before {
+    top: 50%;
+    left: -5px;
+    right: -5px;
+    height: 2px;
+    transform: translateY(-50%);
+}
+
+#crosshair::after {
+    left: 50%;
+    top: -5px;
+    bottom: -5px;
+    width: 2px;
+    transform: translateX(-50%);
+}
+
+#inventory {
+    position: absolute;
+    bottom: 20px;
+    left: 50%;
+    transform: translateX(-50%);
+    display: flex;
+    gap: 5px;
+    background-color: rgba(0, 0, 0, 0.5);
+    padding: 5px;
+    border: 2px solid #333;
+}
+
+.slot {
+    width: 50px;
+    height: 50px;
+    background-color: #8b8b8b;
+    border: 4px solid #555;
+    box-sizing: border-box;
+}
+
+.slot[data-type="grass"] { background-color: #44aa44; border: 4px solid #338833; }
+.slot[data-type="dirt"] { background-color: #8b5a2b; border: 4px solid #5d3a1a; }
+.slot[data-type="stone"] { background-color: #888888; border: 4px solid #555555; }
+.slot[data-type="wood"] { background-color: #634220; border: 4px solid #3d2813; }
+.slot[data-type="leaves"] { background-color: #228b22; border: 4px solid #1a6b1a; }
+
+.slot.active {
+    border-color: #ffffff !important;
+    box-shadow: 0 0 10px white;
+}
+
