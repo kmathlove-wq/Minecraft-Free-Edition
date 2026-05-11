@@ -11,7 +11,28 @@
     <div id="blocker">
         <div id="instructions">
             <p style="font-size:36px">클릭하여 시작</p>
-            <p>(W, A, S, D = 이동, MOUSE = 둘러보기)</p>
+            <p>(W, A, S, D = 이동, MOUSE = 둘러보기, SPACE = 점프/비행)</p>
+            <div id="menu-buttons">
+                <button id="save-btn" class="menu-btn">게임 저장</button>
+                <button id="load-btn" class="menu-btn">게임 불러오기</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="load-menu" class="overlay">
+        <div class="menu-content">
+            <h2>게임 불러오기</h2>
+            <div id="save-list">
+                <!-- 저장된 게임 목록이 여기에 표시됨 -->
+            </div>
+            <button id="close-load-btn" class="menu-btn">닫기</button>
+        </div>
+    </div>
+
+    <div id="loading-overlay" class="overlay">
+        <div class="loading-content">
+            <div class="spinner"></div>
+            <p>처리 중...</p>
         </div>
     </div>
     <div id="crosshair"></div>

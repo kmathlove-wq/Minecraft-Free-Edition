@@ -70,15 +70,41 @@ function init() {
     controls = new PointerLockControls(camera, document.body);
     const blocker = document.getElementById('blocker');
     const instructions = document.getElementById('instructions');
+    const saveBtn = document.getElementById('save-btn');
+    const loadBtn = document.getElementById('load-btn');
+    const loadMenu = document.getElementById('load-menu');
+    const closeLoadBtn = document.getElementById('close-load-btn');
+    const saveList = document.getElementById('save-list');
+    const loadingOverlay = document.getElementById('loading-overlay');
 
-    blocker.addEventListener('click', () => controls.lock());
+    blocker.addEventListener('click', (e) => {
+        if (e.target.tagName !== 'BUTTON') {
+            controls.lock();
+        }
+    });
+
+    saveBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        saveGame();
+    });
+
+    loadBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        openLoadMenu();
+    });
+
+    closeLoadBtn.addEventListener('click', () => {
+        loadMenu.style.display = 'none';
+    });
+
     controls.addEventListener('lock', () => {
         instructions.style.display = 'none';
         blocker.style.display = 'none';
     });
     controls.addEventListener('unlock', () => {
         blocker.style.display = 'block';
-        instructions.style.display = '';
+        instructions.style.display = 'flex';
+        loadMenu.style.display = 'none';
     });
     scene.add(controls.getObject());
 
@@ -117,7 +143,10 @@ function init() {
     document.addEventListener('keyup', onKeyUp);
 
     // 5. Inventory
-    for(let i=0; i<9; i++) inventorySlots.push(document.querySelector(`.slot[data-slot="${i}"]`));
+    for(let i=0; i<9; i++) {
+        const slot = document.querySelector(`.slot[data-slot="${i}"]`);
+        if (slot) inventorySlots.push(slot);
+    }
     document.addEventListener('wheel', (e) => {
         if (!controls.isLocked) return;
         inventorySlots[activeSlot].classList.remove('active');
@@ -184,6 +213,94 @@ function init() {
     });
     prevTime = performance.now();
 }
+
+function saveGame() {
+    const loadingOverlay = document.getElementById('loading-overlay');
+    loadingOverlay.style.display = 'flex';
+
+    setTimeout(() => {
+        const player = controls.getObject();
+        const worldData = objects.map(obj => ({
+            p: { x: obj.position.x, y: obj.position.y, z: obj.position.z },
+            c: obj.material.color.getHex()
+        }));
+
+        const saveData = {
+            timestamp: new Date().toLocaleString(),
+            id: Date.now(),
+            player: {
+                pos: { x: player.position.x, y: player.position.y, z: player.position.z },
+                rot: { y: player.rotation.y },
+                isFlying: isFlying
+            },
+            world: worldData
+        };
+
+        const saves = JSON.parse(localStorage.getItem('minecraft_saves') || '[]');
+        saves.push(saveData);
+        localStorage.setItem('minecraft_saves', JSON.stringify(saves));
+
+        loadingOverlay.style.display = 'none';
+        alert('게임이 저장되었습니다!');
+    }, 500);
+}
+
+function openLoadMenu() {
+    const loadMenu = document.getElementById('load-menu');
+    const saveList = document.getElementById('save-list');
+    saveList.innerHTML = '';
+
+    const saves = JSON.parse(localStorage.getItem('minecraft_saves') || '[]');
+
+    if (saves.length === 0) {
+        saveList.innerHTML = '<p>저장된 게임이 없습니다.</p>';
+    } else {
+        saves.sort((a, b) => b.id - a.id).forEach(save => {
+            const div = document.createElement('div');
+            div.className = 'save-item';
+            div.innerHTML = `
+                <span>${save.timestamp}</span>
+                <button onclick="window.loadSpecificSave(${save.id})">플레이</button>
+            `;
+            saveList.appendChild(div);
+        });
+    }
+    loadMenu.style.display = 'flex';
+}
+
+window.loadSpecificSave = function(id) {
+    const loadingOverlay = document.getElementById('loading-overlay');
+    loadingOverlay.style.display = 'flex';
+    document.getElementById('load-menu').style.display = 'none';
+
+    setTimeout(() => {
+        const saves = JSON.parse(localStorage.getItem('minecraft_saves') || '[]');
+        const saveData = saves.find(s => s.id === id);
+
+        if (saveData) {
+            // 월드 초기화
+            while(objects.length > 0) {
+                const obj = objects.pop();
+                scene.remove(obj);
+            }
+
+            // 블록 복구
+            saveData.world.forEach(data => {
+                addBlock(new THREE.Vector3(data.p.x, data.p.y, data.p.z), data.c);
+            });
+
+            // 플레이어 복구
+            const player = controls.getObject();
+            player.position.set(saveData.player.pos.x, saveData.player.pos.y, saveData.player.pos.z);
+            player.rotation.y = saveData.player.rot.y;
+            isFlying = saveData.player.isFlying;
+            velocity.set(0, 0, 0);
+        }
+
+        loadingOverlay.style.display = 'none';
+        controls.lock();
+    }, 500);
+};
 
 function addBlock(pos, color = 0x44aa44) {
     const mesh = new THREE.Mesh(boxGeometry, new THREE.MeshLambertMaterial({ color }));
