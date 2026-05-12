@@ -259,7 +259,10 @@ function openLoadMenu() {
             const div = document.createElement('div');
             div.className = 'save-item';
             div.innerHTML = `
-                <span>${save.timestamp}</span>
+                <div style="text-align: left;">
+                    <div style="font-weight: bold;">${save.name || '이름 없음'}</div>
+                    <div style="font-size: 0.8em; color: #ccc;">${save.timestamp}</div>
+                </div>
                 <button onclick="window.loadSpecificSave(${save.id})">플레이</button>
             `;
             saveList.appendChild(div);
@@ -278,6 +281,7 @@ window.loadSpecificSave = function(id) {
         const saveData = saves.find(s => s.id === id);
 
         if (saveData) {
+            currentSaveId = id; // 현재 세이브 ID 저장
             // 월드 초기화
             while(objects.length > 0) {
                 const obj = objects.pop();
@@ -370,6 +374,26 @@ function animate() {
             const obj = objects[i];
             if (Math.abs(player.position.x - obj.position.x) > 1 || Math.abs(player.position.z - obj.position.z) > 1) continue;
             const bx = obj.position.x, by = obj.position.y, bz = obj.position.z;
+            if (player.position.x + 0.3 > bx - 0.5 && player.position.x - 0.3 < bx + 0.5 &&
+                player.position.z + 0.3 > bz - 0.5 && player.position.z - 0.3 < bz + 0.5) {
+                if (velocity.y <= 0 && feetY <= by + 0.5 && feetY > by - 0.2) {
+                    velocity.y = 0; player.position.y = by + 0.5 + 1.6; canJump = true;
+                    if (!moveUp && !moveDown) isFlying = false;
+                    break;
+                }
+                if (velocity.y > 0 && player.position.y + 0.2 > by - 0.5 && player.position.y < by) {
+                    velocity.y = 0; player.position.y = by - 0.5 - 0.2;
+                }
+            }
+        }
+        if (player.position.y < -500) {
+            player.position.set(0, 1.6, 0); velocity.set(0, 0, 0); isFlying = false;
+            alert("재시작합니다!");
+        }
+    }
+    renderer.render(scene, camera);
+}
+   const bx = obj.position.x, by = obj.position.y, bz = obj.position.z;
             if (player.position.x + 0.3 > bx - 0.5 && player.position.x - 0.3 < bx + 0.5 &&
                 player.position.z + 0.3 > bz - 0.5 && player.position.z - 0.3 < bz + 0.5) {
                 if (velocity.y <= 0 && feetY <= by + 0.5 && feetY > by - 0.2) {

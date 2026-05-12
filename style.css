@@ -19,19 +19,25 @@ body {
 }
 
 #instructions {
-    pointer-events: auto; /* 버튼 클릭을 위해 수정 */
-}
-
-#menu-buttons {
-    margin-top: 20px;
+    pointer-events: auto;
     display: flex;
-    gap: 10px;
+    flex-direction: column;
+    align-items: center;
     justify-content: center;
 }
 
+#menu-buttons {
+    margin-top: 30px;
+    display: flex;
+    flex-direction: column;
+    gap: 15px;
+    width: 200px;
+}
+
 .menu-btn {
-    padding: 10px 20px;
-    font-size: 18px;
+    width: 100%;
+    padding: 15px;
+    font-size: 20px;
     cursor: pointer;
     background-color: #4CAF50;
     color: white;

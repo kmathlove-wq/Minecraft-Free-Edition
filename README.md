@@ -3,4 +3,4 @@
 웹 브라우저에서 즐기는 마인크래프트 클론 프로젝트입니다.
 
 ## 배포 주소
-https://kmathlove-wq.github.io/Minecraft-Free-Edition/
+http://xn---free-edition2026-v701eo97p.kro.kr/
