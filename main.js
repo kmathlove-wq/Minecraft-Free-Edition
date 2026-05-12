@@ -20,6 +20,8 @@ let isFlying = false;
 let lastJumpPressTime = 0;
 const doublePressDelay = 200;
 
+let currentSaveId = null; // 현재 불러온 게임의 ID
+
 let prevTime = performance.now();
 const velocity = new THREE.Vector3();
 const direction = new THREE.Vector3();
@@ -215,6 +217,27 @@ function init() {
 }
 
 function saveGame() {
+    const saves = JSON.parse(localStorage.getItem('minecraft_saves') || '[]');
+    let saveName = "";
+
+    if (currentSaveId) {
+        const existingSave = saves.find(s => s.id === currentSaveId);
+        if (existingSave) {
+            const overwrite = confirm(`'${existingSave.name || existingSave.timestamp}' 월드에 덮어쓰시겠습니까?`);
+            if (!overwrite) {
+                currentSaveId = null; // 덮어쓰지 않으면 새로운 저장으로 취급
+            } else {
+                saveName = prompt("저장할 이름을 입력하세요:", existingSave.name || "");
+                if (saveName === null) return; // 취소 시 중단
+            }
+        }
+    }
+
+    if (!currentSaveId) {
+        saveName = prompt("새로운 저장 이름을 입력하세요:", "새 월드");
+        if (saveName === null) return; // 취소 시 중단
+    }
+
     const loadingOverlay = document.getElementById('loading-overlay');
     loadingOverlay.style.display = 'flex';
 
@@ -225,9 +248,11 @@ function saveGame() {
             c: obj.material.color.getHex()
         }));
 
+        const newSaveId = currentSaveId || Date.now();
         const saveData = {
+            name: saveName || new Date().toLocaleString(),
             timestamp: new Date().toLocaleString(),
-            id: Date.now(),
+            id: newSaveId,
             player: {
                 pos: { x: player.position.x, y: player.position.y, z: player.position.z },
                 rot: { y: player.rotation.y },
@@ -236,8 +261,18 @@ function saveGame() {
             world: worldData
         };
 
-        const saves = JSON.parse(localStorage.getItem('minecraft_saves') || '[]');
-        saves.push(saveData);
+        if (currentSaveId) {
+            const index = saves.findIndex(s => s.id === currentSaveId);
+            if (index !== -1) {
+                saves[index] = saveData;
+            } else {
+                saves.push(saveData);
+            }
+        } else {
+            saves.push(saveData);
+            currentSaveId = newSaveId;
+        }
+        
         localStorage.setItem('minecraft_saves', JSON.stringify(saves));
 
         loadingOverlay.style.display = 'none';
@@ -374,26 +409,6 @@ function animate() {
             const obj = objects[i];
             if (Math.abs(player.position.x - obj.position.x) > 1 || Math.abs(player.position.z - obj.position.z) > 1) continue;
             const bx = obj.position.x, by = obj.position.y, bz = obj.position.z;
-            if (player.position.x + 0.3 > bx - 0.5 && player.position.x - 0.3 < bx + 0.5 &&
-                player.position.z + 0.3 > bz - 0.5 && player.position.z - 0.3 < bz + 0.5) {
-                if (velocity.y <= 0 && feetY <= by + 0.5 && feetY > by - 0.2) {
-                    velocity.y = 0; player.position.y = by + 0.5 + 1.6; canJump = true;
-                    if (!moveUp && !moveDown) isFlying = false;
-                    break;
-                }
-                if (velocity.y > 0 && player.position.y + 0.2 > by - 0.5 && player.position.y < by) {
-                    velocity.y = 0; player.position.y = by - 0.5 - 0.2;
-                }
-            }
-        }
-        if (player.position.y < -500) {
-            player.position.set(0, 1.6, 0); velocity.set(0, 0, 0); isFlying = false;
-            alert("재시작합니다!");
-        }
-    }
-    renderer.render(scene, camera);
-}
-   const bx = obj.position.x, by = obj.position.y, bz = obj.position.z;
             if (player.position.x + 0.3 > bx - 0.5 && player.position.x - 0.3 < bx + 0.5 &&
                 player.position.z + 0.3 > bz - 0.5 && player.position.z - 0.3 < bz + 0.5) {
                 if (velocity.y <= 0 && feetY <= by + 0.5 && feetY > by - 0.2) {
