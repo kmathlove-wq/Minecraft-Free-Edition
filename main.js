@@ -104,7 +104,7 @@ function init() {
         blocker.style.display = 'none';
     });
     controls.addEventListener('unlock', () => {
-        blocker.style.display = 'block';
+        blocker.style.display = 'flex';
         instructions.style.display = 'flex';
         loadMenu.style.display = 'none';
     });
@@ -225,17 +225,17 @@ function saveGame() {
         if (existingSave) {
             const overwrite = confirm(`'${existingSave.name || existingSave.timestamp}' 월드에 덮어쓰시겠습니까?`);
             if (!overwrite) {
-                currentSaveId = null; // 덮어쓰지 않으면 새로운 저장으로 취급
+                currentSaveId = null; 
             } else {
                 saveName = prompt("저장할 이름을 입력하세요:", existingSave.name || "");
-                if (saveName === null) return; // 취소 시 중단
+                if (saveName === null) return;
             }
         }
     }
 
     if (!currentSaveId) {
         saveName = prompt("새로운 저장 이름을 입력하세요:", "새 월드");
-        if (saveName === null) return; // 취소 시 중단
+        if (saveName === null) return;
     }
 
     const loadingOverlay = document.getElementById('loading-overlay');
@@ -316,19 +316,16 @@ window.loadSpecificSave = function(id) {
         const saveData = saves.find(s => s.id === id);
 
         if (saveData) {
-            currentSaveId = id; // 현재 세이브 ID 저장
-            // 월드 초기화
+            currentSaveId = id;
             while(objects.length > 0) {
                 const obj = objects.pop();
                 scene.remove(obj);
             }
 
-            // 블록 복구
             saveData.world.forEach(data => {
                 addBlock(new THREE.Vector3(data.p.x, data.p.y, data.p.z), data.c);
             });
 
-            // 플레이어 복구
             const player = controls.getObject();
             player.position.set(saveData.player.pos.x, saveData.player.pos.y, saveData.player.pos.z);
             player.rotation.y = saveData.player.rot.y;
@@ -370,11 +367,14 @@ function animate() {
     if (controls.isLocked) {
         velocity.x -= velocity.x * 10.0 * delta;
         velocity.z -= velocity.z * 10.0 * delta;
+        
         if (isFlying) {
             velocity.y = 0;
             if (moveUp) velocity.y = 10;
             if (moveDown) velocity.y = -10;
-        } else velocity.y -= 9.8 * 4.0 * delta;
+        } else {
+            velocity.y -= 9.8 * 4.0 * delta;
+        }
 
         direction.z = Number(moveForward) - Number(moveBackward);
         direction.x = Number(moveRight) - Number(moveLeft);
@@ -393,6 +393,7 @@ function animate() {
                 player.position.z = oldPos.z; player.position.x = oldPos.x; velocity.z = 0;
             }
         }
+        
         const posAfterZ = player.position.clone();
         if (velocity.x !== 0) {
             controls.moveRight(-velocity.x * delta);
@@ -421,6 +422,7 @@ function animate() {
                 }
             }
         }
+        
         if (player.position.y < -500) {
             player.position.set(0, 1.6, 0); velocity.set(0, 0, 0); isFlying = false;
             alert("재시작합니다!");
