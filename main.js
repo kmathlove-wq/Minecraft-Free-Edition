@@ -294,17 +294,33 @@ function openLoadMenu() {
             const div = document.createElement('div');
             div.className = 'save-item';
             div.innerHTML = `
-                <div style="text-align: left;">
+                <div style="text-align: left; flex-grow: 1;">
                     <div style="font-weight: bold;">${save.name || '이름 없음'}</div>
                     <div style="font-size: 0.8em; color: #ccc;">${save.timestamp}</div>
                 </div>
-                <button onclick="window.loadSpecificSave(${save.id})">플레이</button>
+                <div style="display: flex; gap: 5px;">
+                    <button onclick="window.loadSpecificSave(${save.id})" style="background-color: #2196F3;">플레이</button>
+                    <button onclick="window.deleteSave(${save.id})" style="background-color: #f44336;">삭제</button>
+                </div>
             `;
             saveList.appendChild(div);
         });
     }
     loadMenu.style.display = 'flex';
 }
+
+window.deleteSave = function(id) {
+    const saves = JSON.parse(localStorage.getItem('minecraft_saves') || '[]');
+    const save = saves.find(s => s.id === id);
+    if (!save) return;
+
+    if (confirm(`'${save.name || save.timestamp}' 월드를 삭제하시겠습니까?`)) {
+        const filteredSaves = saves.filter(s => s.id !== id);
+        localStorage.setItem('minecraft_saves', JSON.stringify(filteredSaves));
+        if (currentSaveId === id) currentSaveId = null;
+        openLoadMenu(); // 목록 갱신
+    }
+};
 
 window.loadSpecificSave = function(id) {
     const loadingOverlay = document.getElementById('loading-overlay');
