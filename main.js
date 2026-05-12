@@ -355,7 +355,13 @@ window.loadSpecificSave = function(id) {
 };
 
 function addBlock(pos, color = 0x44aa44) {
-    const mesh = new THREE.Mesh(boxGeometry, new THREE.MeshLambertMaterial({ color }));
+    const material = new THREE.MeshLambertMaterial({ 
+        color: color,
+        polygonOffset: true,
+        polygonOffsetFactor: 1, 
+        polygonOffsetUnits: 1
+    });
+    const mesh = new THREE.Mesh(boxGeometry, material);
     mesh.position.copy(pos);
     const wireframe = new THREE.LineSegments(edgesGeometry, lineMaterial);
     mesh.add(wireframe);
