@@ -345,7 +345,12 @@ window.loadSpecificSave = function(id) {
 
             const player = controls.getObject();
             player.position.set(saveData.player.pos.x, saveData.player.pos.y, saveData.player.pos.z);
-            player.rotation.set(saveData.player.rot.x || 0, saveData.player.rot.y, 0);
+            
+            // PointerLockControls의 내부 객체 회전 설정
+            player.rotation.set(0, saveData.player.rot.y, 0);
+            // 카메라는 x축(상하)만 회전
+            camera.rotation.set(saveData.player.rot.x || 0, 0, 0);
+            
             isFlying = saveData.player.isFlying;
             velocity.set(0, 0, 0);
         }
