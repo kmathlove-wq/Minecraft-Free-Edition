@@ -301,6 +301,7 @@ function openLoadMenu() {
                 </div>
                 <div style="display: flex; gap: 5px;">
                     <button onclick="window.loadSpecificSave(${save.id})" style="background-color: #2196F3;">플레이</button>
+                    <button onclick="window.renameSave(${save.id})" style="background-color: #FF9800;">이름 변경</button>
                     <button onclick="window.deleteSave(${save.id})" style="background-color: #f44336;">삭제</button>
                 </div>
             `;
@@ -309,6 +310,21 @@ function openLoadMenu() {
     }
     loadMenu.style.display = 'flex';
 }
+
+window.renameSave = function(id) {
+    const saves = JSON.parse(localStorage.getItem('minecraft_saves') || '[]');
+    const saveIndex = saves.findIndex(s => s.id === id);
+    if (saveIndex === -1) return;
+
+    const currentName = saves[saveIndex].name || '';
+    const newName = prompt("새로운 월드 이름을 입력하세요:", currentName);
+    
+    if (newName !== null && newName.trim() !== "") {
+        saves[saveIndex].name = newName.trim();
+        localStorage.setItem('minecraft_saves', JSON.stringify(saves));
+        openLoadMenu(); // 목록 갱신
+    }
+};
 
 window.deleteSave = function(id) {
     const saves = JSON.parse(localStorage.getItem('minecraft_saves') || '[]');
