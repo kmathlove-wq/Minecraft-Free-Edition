@@ -55,6 +55,7 @@ function init() {
     // 1. Scene & Camera
     camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
     camera.position.set(0, 1.6, 0);
+    camera.rotation.order = 'YXZ';
 
     scene = new THREE.Scene();
     scene.background = new THREE.Color(0x87ceeb);
@@ -255,7 +256,7 @@ function saveGame() {
             id: newSaveId,
             player: {
                 pos: { x: player.position.x, y: player.position.y, z: player.position.z },
-                rot: { y: player.rotation.y },
+                rot: { x: player.rotation.x, y: player.rotation.y },
                 isFlying: isFlying
             },
             world: worldData
@@ -344,7 +345,7 @@ window.loadSpecificSave = function(id) {
 
             const player = controls.getObject();
             player.position.set(saveData.player.pos.x, saveData.player.pos.y, saveData.player.pos.z);
-            player.rotation.y = saveData.player.rot.y;
+            player.rotation.set(saveData.player.rot.x || 0, saveData.player.rot.y, 0);
             isFlying = saveData.player.isFlying;
             velocity.set(0, 0, 0);
         }
