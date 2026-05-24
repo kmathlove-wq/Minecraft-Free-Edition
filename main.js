@@ -706,8 +706,8 @@ function animate() {
         player.position.y += velocity.y * delta;
         canJump = false;
         const px = player.position.x, py = player.position.y, pz = player.position.z;
-        const minBx = Math.ceil(px - 0.79), maxBx = Math.floor(px + 0.79);
-        const minBz = Math.ceil(pz - 0.79), maxBz = Math.floor(pz + 0.79);
+        const minBx = Math.ceil(px - 0.75), maxBx = Math.floor(px + 0.75);
+        const minBz = Math.ceil(pz - 0.75), maxBz = Math.floor(pz + 0.75);
 
         if (velocity.y <= 0) {
             const feetY = py - 1.6;
