@@ -331,8 +331,8 @@ function destroyBlock(x, y, z) {
 
 // ===== COLLISION =====
 function checkHorizontalCollision(px, py, pz) {
-    const minBx = Math.floor(px - 0.25), maxBx = Math.floor(px + 0.25);
-    const minBz = Math.floor(pz - 0.25), maxBz = Math.floor(pz + 0.25);
+    const minBx = Math.ceil(px - 0.75), maxBx = Math.floor(px + 0.75);
+    const minBz = Math.ceil(pz - 0.75), maxBz = Math.floor(pz + 0.75);
     const minBy = Math.ceil(py - 1.55),  maxBy = Math.floor(py + 0.15);
     for (let bx = minBx; bx <= maxBx; bx++) {
         for (let bz = minBz; bz <= maxBz; bz++) {
