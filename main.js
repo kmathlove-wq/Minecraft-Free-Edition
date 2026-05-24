@@ -258,13 +258,16 @@ function updateChunks(px, pz) {
 
 // ===== DDA VOXEL RAYCAST =====
 // O(range) instead of O(scene_objects) — replaces Three.js raycaster on large arrays
+// Blocks are centered at integers (occupy n±0.5), so we use Math.round for the starting
+// block and ±0.5 boundaries — NOT Math.floor which is misaligned with block centers.
 function voxelRaycast(maxDist) {
     camera.getWorldPosition(_vrcOrigin);
     camera.getWorldDirection(_vrcDir);
     const ox = _vrcOrigin.x, oy = _vrcOrigin.y, oz = _vrcOrigin.z;
     const dx = _vrcDir.x,    dy = _vrcDir.y,    dz = _vrcDir.z;
 
-    let x = Math.floor(ox), y = Math.floor(oy), z = Math.floor(oz);
+    // Block at integer n occupies [n-0.5, n+0.5]; use round to find correct starting block
+    let x = Math.round(ox), y = Math.round(oy), z = Math.round(oz);
 
     const sx = dx >= 0 ? 1 : -1;
     const sy = dy >= 0 ? 1 : -1;
@@ -274,9 +277,10 @@ function voxelRaycast(maxDist) {
     const tdy = Math.abs(dy) > 1e-9 ? Math.abs(1/dy) : 1e9;
     const tdz = Math.abs(dz) > 1e-9 ? Math.abs(1/dz) : 1e9;
 
-    let tmx = dx >= 0 ? (x+1 - ox)*tdx : (ox - x)*tdx;
-    let tmy = dy >= 0 ? (y+1 - oy)*tdy : (oy - y)*tdy;
-    let tmz = dz >= 0 ? (z+1 - oz)*tdz : (oz - z)*tdz;
+    // Distance to the first block-face boundary (at x±0.5) in each direction
+    let tmx = dx >= 0 ? (x + 0.5 - ox)*tdx : (ox - x + 0.5)*tdx;
+    let tmy = dy >= 0 ? (y + 0.5 - oy)*tdy : (oy - y + 0.5)*tdy;
+    let tmz = dz >= 0 ? (z + 0.5 - oz)*tdz : (oz - z + 0.5)*tdz;
 
     let fx = 0, fy = 0, fz = 0;
 
