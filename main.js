@@ -330,8 +330,6 @@ function destroyBlock(x, y, z) {
 }
 
 // ===== COLLISION =====
-const LEAF_COLOR = 0x228b22;
-
 function checkHorizontalCollision(px, py, pz) {
     const minBx = Math.floor(px - 0.25), maxBx = Math.floor(px + 0.25);
     const minBz = Math.floor(pz - 0.25), maxBz = Math.floor(pz + 0.25);
@@ -339,9 +337,7 @@ function checkHorizontalCollision(px, py, pz) {
     for (let bx = minBx; bx <= maxBx; bx++) {
         for (let bz = minBz; bz <= maxBz; bz++) {
             for (let by = minBy; by <= maxBy; by++) {
-                const info = blockMap.get(bkey(bx, by, bz));
-                // Terrain leaves are passable; player-placed blocks always solid
-                if (info && (info.color !== LEAF_COLOR || info.playerPlaced)) return true;
+                if (blockMap.has(bkey(bx, by, bz))) return true;
             }
         }
     }
@@ -710,8 +706,8 @@ function animate() {
         player.position.y += velocity.y * delta;
         canJump = false;
         const px = player.position.x, py = player.position.y, pz = player.position.z;
-        const minBx = Math.floor(px - 0.29), maxBx = Math.floor(px + 0.29);
-        const minBz = Math.floor(pz - 0.29), maxBz = Math.floor(pz + 0.29);
+        const minBx = Math.ceil(px - 0.79), maxBx = Math.floor(px + 0.79);
+        const minBz = Math.ceil(pz - 0.79), maxBz = Math.floor(pz + 0.79);
 
         if (velocity.y <= 0) {
             const feetY = py - 1.6;
