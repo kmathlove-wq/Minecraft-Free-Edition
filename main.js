@@ -77,7 +77,7 @@ function registerBlock(x, y, z, color) {
     dummy.updateMatrix();
     im.setMatrixAt(id, dummy.matrix);
     iRevMap.get(color)[id] = k;
-    blockMap.set(k, { color, id });
+    blockMap.set(k, { color, id, playerPlaced: false });
     return k;
 }
 
@@ -307,6 +307,8 @@ function addBlock(nx, ny, nz, color) {
     const k = bkey(nx, ny, nz);
     if (blockMap.has(k)) return;
     registerBlock(nx, ny, nz, color);
+    const info = blockMap.get(k);
+    if (info) info.playerPlaced = true;
     flushInstances();
     playerMods.set(k, color);
     const cxb   = Math.floor(nx/CHUNK_SIZE), czb = Math.floor(nz/CHUNK_SIZE);
@@ -338,7 +340,8 @@ function checkHorizontalCollision(px, py, pz) {
         for (let bz = minBz; bz <= maxBz; bz++) {
             for (let by = minBy; by <= maxBy; by++) {
                 const info = blockMap.get(bkey(bx, by, bz));
-                if (info && info.color !== LEAF_COLOR) return true;
+                // Terrain leaves are passable; player-placed blocks always solid
+                if (info && (info.color !== LEAF_COLOR || info.playerPlaced)) return true;
             }
         }
     }
@@ -632,8 +635,17 @@ function init() {
         }
     }
 
-    const spawnH = getTerrainHeight(8, 8) + 3;
-    controls.getObject().position.set(8, spawnH + 1.6, 8);
+    // Find a spawn position guaranteed to not have a tree trunk
+    let spawnX = 8, spawnZ = 8;
+    if (isTreeSpot(spawnX, spawnZ)) {
+        outer: for (let tz = 0; tz < CHUNK_SIZE; tz++) {
+            for (let tx = 0; tx < CHUNK_SIZE; tx++) {
+                if (!isTreeSpot(tx, tz)) { spawnX = tx; spawnZ = tz; break outer; }
+            }
+        }
+    }
+    const spawnH = getTerrainHeight(spawnX, spawnZ);
+    controls.getObject().position.set(spawnX, spawnH + 3, spawnZ);
     prevTime = performance.now();
 }
 
@@ -717,7 +729,8 @@ function animate() {
                 }
             }
         } else {
-            const ceilY = Math.floor(py + 0.2);
+            // Math.round correctly finds the block containing the head (blocks centered at integers)
+            const ceilY = Math.round(py + 0.2);
             outer: for (let bx = minBx; bx <= maxBx; bx++) {
                 for (let bz = minBz; bz <= maxBz; bz++) {
                     if (blockMap.has(bkey(bx, ceilY, bz))) {
