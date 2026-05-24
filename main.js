@@ -678,6 +678,7 @@ function animate() {
             if (moveDown) velocity.y = -10;
         } else {
             velocity.y -= 9.8 * 4.0 * delta;
+            velocity.y = Math.max(velocity.y, -20);
         }
 
         direction.z = Number(moveForward)  - Number(moveBackward);
@@ -713,14 +714,16 @@ function animate() {
         const minBz = Math.floor(pz - 0.29), maxBz = Math.floor(pz + 0.29);
 
         if (velocity.y <= 0) {
-            const floorY = Math.floor(py - 1.6);
-            outer: for (let bx = minBx; bx <= maxBx; bx++) {
-                for (let bz = minBz; bz <= maxBz; bz++) {
-                    if (blockMap.has(bkey(bx, floorY, bz))) {
-                        const feetY = py - 1.6;
-                        if (feetY <= floorY + 0.5 && feetY > floorY - 0.3) {
+            const feetY = py - 1.6;
+            const floorY = Math.floor(feetY);
+            outer: for (let fy = floorY + 1; fy >= floorY - 1; fy--) {
+                const blockTop = fy + 0.5;
+                if (feetY > blockTop + 0.3 || feetY < fy - 0.5) continue;
+                for (let bx = minBx; bx <= maxBx; bx++) {
+                    for (let bz = minBz; bz <= maxBz; bz++) {
+                        if (blockMap.has(bkey(bx, fy, bz))) {
                             velocity.y = 0;
-                            player.position.y = floorY + 0.5 + 1.6;
+                            player.position.y = blockTop + 1.6;
                             canJump = true;
                             if (!moveUp && !moveDown) isFlying = false;
                             break outer;
