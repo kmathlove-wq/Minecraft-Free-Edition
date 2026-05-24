@@ -1,0 +1,35 @@
+name: Cache Bust
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'main.js'
+      - 'style.css'
+
+jobs:
+  cache-bust:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Bump version query string in index.html
+        run: |
+          VERSION=$(date +%Y%m%d%H%M%S)
+          sed -i "s|src=\"main\.js[^\"]*\"|src=\"main.js?v=$VERSION\"|" index.html
+          sed -i "s|href=\"style\.css[^\"]*\"|href=\"style.css?v=$VERSION\"|" index.html
+
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config user.name "github-actions[bot]"
+
+          if git diff --quiet index.html; then
+            echo "index.html unchanged, skipping commit"
+          else
+            git add index.html
+            git commit -m "chore: bump cache version"
+            git push
+          fi
