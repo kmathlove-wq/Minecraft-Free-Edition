@@ -345,24 +345,6 @@ function checkHorizontalCollision(px, py, pz) {
     return false;
 }
 
-// Move in one horizontal axis with automatic 1-block step-up
-function moveWithStepUp(moveFn, fallback) {
-    const player = controls.getObject();
-    moveFn();
-    const px = player.position.x, py = player.position.y, pz = player.position.z;
-    if (!checkHorizontalCollision(px, py, pz)) return true;
-    // Try stepping up over a 1-block obstacle
-    if (canJump) {
-        player.position.y += 0.51;
-        if (!checkHorizontalCollision(player.position.x, player.position.y, player.position.z)) {
-            velocity.y = 0;
-            return true;
-        }
-        player.position.y -= 0.51;
-    }
-    player.position.copy(fallback);
-    return false;
-}
 
 // ===== SAVE / LOAD =====
 function saveGame() {
@@ -697,12 +679,18 @@ function animate() {
         const oldPos = player.position.clone();
 
         if (velocity.z !== 0) {
-            if (!moveWithStepUp(() => controls.moveForward(-velocity.z * delta), oldPos)) velocity.z = 0;
+            controls.moveForward(-velocity.z * delta);
+            if (checkHorizontalCollision(player.position.x, player.position.y, player.position.z)) {
+                player.position.copy(oldPos); velocity.z = 0;
+            }
         }
 
         const posAfterZ = player.position.clone();
         if (velocity.x !== 0) {
-            if (!moveWithStepUp(() => controls.moveRight(-velocity.x * delta), posAfterZ)) velocity.x = 0;
+            controls.moveRight(-velocity.x * delta);
+            if (checkHorizontalCollision(player.position.x, player.position.y, player.position.z)) {
+                player.position.copy(posAfterZ); velocity.x = 0;
+            }
         }
 
         // Vertical movement & landing
