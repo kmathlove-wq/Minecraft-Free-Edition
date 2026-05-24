@@ -2,14 +2,13 @@ import * as THREE from 'three';
 import { PointerLockControls } from 'three/addons/controls/PointerLockControls.js';
 
 // ===== CONFIG =====
-const CHUNK_SIZE = 16;
-const RENDER_DISTANCE = 8;
-const TERRAIN_DEPTH = 4;
+const CHUNK_SIZE      = 16;
+const RENDER_DISTANCE = 4;
+const TERRAIN_DEPTH   = 4;
+const MAX_INSTANCES   = 200000;
 
 // ===== STATE =====
 let camera, scene, renderer, controls;
-const raycaster = new THREE.Raycaster();
-const mouse = new THREE.Vector2(0, 0);
 
 let moveForward = false, moveBackward = false, moveLeft = false, moveRight = false;
 let moveUp = false, moveDown = false, canJump = false;
@@ -17,35 +16,98 @@ let isFlying = false, lastJumpPressTime = 0;
 const doublePressDelay = 200;
 let currentSaveId = null;
 let prevTime = performance.now();
-const velocity = new THREE.Vector3();
+const velocity  = new THREE.Vector3();
 const direction = new THREE.Vector3();
 
 let activeSlot = 0;
 const inventorySlots = [];
 const blockTypes = {
-    0: { name: 'grass', color: 0x44aa44 },
-    1: { name: 'dirt',  color: 0x8b5a2b },
-    2: { name: 'stone', color: 0x888888 },
-    3: { name: 'wood',  color: 0x634220 },
-    4: { name: 'leaves',color: 0x228b22 }
+    0: { name: 'grass',  color: 0x44aa44 },
+    1: { name: 'dirt',   color: 0x8b5a2b },
+    2: { name: 'stone',  color: 0x888888 },
+    3: { name: 'wood',   color: 0x634220 },
+    4: { name: 'leaves', color: 0x228b22 }
 };
 
 // ===== SHARED GEOMETRY =====
-const boxGeometry  = new THREE.BoxGeometry(1, 1, 1);
+const boxGeometry   = new THREE.BoxGeometry(1, 1, 1);
 const edgesGeometry = new THREE.EdgesGeometry(boxGeometry);
-const lineMaterial = new THREE.LineBasicMaterial({
-    color: 0x000000, depthTest: true,
-    polygonOffset: true, polygonOffsetFactor: 0.5, polygonOffsetUnits: 1.0
-});
+const lineMaterial  = new THREE.LineBasicMaterial({ color: 0x000000, depthTest: true });
 
 // ===== WORLD DATA =====
-const loadedChunks = new Map();  // "cx,cz" -> { meshes: Mesh[] }
-const blockMap     = new Map();  // "x,y,z" -> Mesh  (O(1) collision)
-const playerMods   = new Map();  // "x,y,z" -> color | null (placed | destroyed)
-const objects      = [];         // all Meshes for raycasting
+const loadedChunks = new Map();  // "cx,cz" -> { blockKeys: string[] }
+const blockMap     = new Map();  // "x,y,z" -> { color, id }
+const playerMods   = new Map();  // "x,y,z" -> color | null
+
+// ===== INSTANCED MESH =====
+// One InstancedMesh per color — replaces ~300k individual Mesh objects
+const iMeshes = new Map();  // color -> InstancedMesh
+const iRevMap = new Map();  // color -> string[] (instanceId -> bkey)
+const dummy   = new THREE.Object3D();
+let highlightMesh = null;
+let currentTarget = null;
+
+// Pre-allocated vectors to avoid per-frame allocation
+const _vrcOrigin = new THREE.Vector3();
+const _vrcDir    = new THREE.Vector3();
+
+function getIM(color) {
+    if (!iMeshes.has(color)) {
+        const mat = new THREE.MeshLambertMaterial({
+            color,
+            polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1
+        });
+        const im = new THREE.InstancedMesh(boxGeometry, mat, MAX_INSTANCES);
+        im.count = 0;
+        im.frustumCulled = false;
+        scene.add(im);
+        iMeshes.set(color, im);
+        iRevMap.set(color, []);
+    }
+    return iMeshes.get(color);
+}
+
+function registerBlock(x, y, z, color) {
+    const k = bkey(x, y, z);
+    if (blockMap.has(k)) return null;
+    const im = getIM(color);
+    if (im.count >= MAX_INSTANCES) return null;
+    const id = im.count++;
+    dummy.position.set(x|0, y|0, z|0);
+    dummy.updateMatrix();
+    im.setMatrixAt(id, dummy.matrix);
+    iRevMap.get(color)[id] = k;
+    blockMap.set(k, { color, id });
+    return k;
+}
+
+function unregisterBlock(x, y, z) {
+    const k    = bkey(x, y, z);
+    const info = blockMap.get(k);
+    if (!info) return;
+    const { color, id } = info;
+    const im     = iMeshes.get(color);
+    const rm     = iRevMap.get(color);
+    const lastId = --im.count;
+    if (id !== lastId) {
+        const tmp = new THREE.Matrix4();
+        im.getMatrixAt(lastId, tmp);
+        im.setMatrixAt(id, tmp);
+        const lastKey = rm[lastId];
+        rm[id] = lastKey;
+        blockMap.get(lastKey).id = id;
+    }
+    rm[lastId] = undefined;
+    im.instanceMatrix.needsUpdate = true;
+    blockMap.delete(k);
+}
+
+function flushInstances() {
+    for (const im of iMeshes.values()) im.instanceMatrix.needsUpdate = true;
+}
 
 // ===== CHUNK QUEUE =====
-let chunkQueue = [];
+let chunkQueue   = [];
 let lastPlayerCx = null, lastPlayerCz = null;
 
 // ===== NOISE =====
@@ -63,54 +125,20 @@ function smoothNoise(x, z) {
          + hash2(ix,iz+1)*(1-ux)*uz   + hash2(ix+1,iz+1)*ux*uz;
 }
 function getTerrainHeight(wx, wz) {
-    let h = smoothNoise(wx*0.006, wz*0.006) * 35;
-    h    += smoothNoise(wx*0.025, wz*0.025) * 10;
-    h    += smoothNoise(wx*0.1,   wz*0.1)   * 3;
+    let h  = smoothNoise(wx*0.006, wz*0.006) * 35;
+    h     += smoothNoise(wx*0.025, wz*0.025) * 10;
+    h     += smoothNoise(wx*0.1,   wz*0.1)   * 3;
     return Math.floor(h) + 5;
 }
 function isTreeSpot(wx, wz) {
-    // keep trunk ≥3 blocks from chunk border so leaves never cross chunks
     const lx = ((wx % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
     const lz = ((wz % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
     if (lx < 3 || lx >= CHUNK_SIZE-3 || lz < 3 || lz >= CHUNK_SIZE-3) return false;
     return hash2(wx*7+3, wz*13+9) > 0.94;
 }
 
-// ===== MATERIALS =====
-const matCache = new Map();
-function getMat(color) {
-    if (!matCache.has(color)) {
-        matCache.set(color, new THREE.MeshLambertMaterial({
-            color, polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1
-        }));
-    }
-    return matCache.get(color);
-}
-
-// ===== BLOCK HELPERS =====
+// ===== BLOCK KEY =====
 function bkey(x, y, z) { return `${x|0},${y|0},${z|0}`; }
-
-function createBlockMesh(x, y, z, color) {
-    const mesh = new THREE.Mesh(boxGeometry, getMat(color));
-    mesh.position.set(x|0, y|0, z|0);
-    mesh.add(new THREE.LineSegments(edgesGeometry, lineMaterial));
-    return mesh;
-}
-
-function registerBlock(mesh) {
-    scene.add(mesh);
-    objects.push(mesh);
-    const p = mesh.position;
-    blockMap.set(bkey(p.x, p.y, p.z), mesh);
-}
-
-function unregisterBlock(mesh) {
-    scene.remove(mesh);
-    const i = objects.indexOf(mesh);
-    if (i !== -1) objects.splice(i, 1);
-    const p = mesh.position;
-    blockMap.delete(bkey(p.x, p.y, p.z));
-}
 
 // ===== CHUNK GENERATION =====
 function getChunkBlocks(cx, cz) {
@@ -121,7 +149,7 @@ function getChunkBlocks(cx, cz) {
             const wz = cz * CHUNK_SIZE + lz;
             const topY = getTerrainHeight(wx, wz);
             for (let depth = 0; depth <= TERRAIN_DEPTH; depth++) {
-                const y = topY - depth;
+                const y     = topY - depth;
                 const color = depth === 0 ? 0x44aa44 : depth <= 2 ? 0x8b5a2b : 0x888888;
                 result.push({ x: wx, y, z: wz, color });
             }
@@ -149,60 +177,57 @@ function loadChunk(cx, cz) {
     const key = `${cx},${cz}`;
     if (loadedChunks.has(key)) return;
 
-    const meshes = [];
-    const blocks = getChunkBlocks(cx, cz);
+    const blockKeys = [];
+    const blocks    = getChunkBlocks(cx, cz);
+    const minX = cx * CHUNK_SIZE, maxX = (cx+1) * CHUNK_SIZE;
+    const minZ = cz * CHUNK_SIZE, maxZ = (cz+1) * CHUNK_SIZE;
 
     for (const { x, y, z, color } of blocks) {
         const k = bkey(x, y, z);
         if (blockMap.has(k)) continue;
-
         if (playerMods.has(k)) {
             const modColor = playerMods.get(k);
             if (modColor !== null) {
-                const mesh = createBlockMesh(x, y, z, modColor);
-                registerBlock(mesh);
-                meshes.push(mesh);
+                const rk = registerBlock(x, y, z, modColor);
+                if (rk) blockKeys.push(rk);
             }
             continue;
         }
-        const mesh = createBlockMesh(x, y, z, color);
-        registerBlock(mesh);
-        meshes.push(mesh);
+        const rk = registerBlock(x, y, z, color);
+        if (rk) blockKeys.push(rk);
     }
 
-    // Player-placed blocks above terrain in this chunk
-    const minX = cx * CHUNK_SIZE, maxX = (cx+1) * CHUNK_SIZE;
-    const minZ = cz * CHUNK_SIZE, maxZ = (cz+1) * CHUNK_SIZE;
     for (const [k, modColor] of playerMods) {
-        if (modColor === null) continue;
-        if (blockMap.has(k)) continue;
+        if (modColor === null || blockMap.has(k)) continue;
         const [bx, by, bz] = k.split(',').map(Number);
         if (bx >= minX && bx < maxX && bz >= minZ && bz < maxZ) {
-            const mesh = createBlockMesh(bx, by, bz, modColor);
-            registerBlock(mesh);
-            meshes.push(mesh);
+            const rk = registerBlock(bx, by, bz, modColor);
+            if (rk) blockKeys.push(rk);
         }
     }
 
-    loadedChunks.set(key, { meshes });
+    flushInstances();
+    loadedChunks.set(key, { blockKeys });
 }
 
 function unloadChunk(cx, cz) {
-    const key = `${cx},${cz}`;
+    const key   = `${cx},${cz}`;
     const chunk = loadedChunks.get(key);
     if (!chunk) return;
-    for (const mesh of chunk.meshes) unregisterBlock(mesh);
+    for (const k of chunk.blockKeys) {
+        const [x, y, z] = k.split(',').map(Number);
+        unregisterBlock(x, y, z);
+    }
     loadedChunks.delete(key);
 }
 
-// ===== CHUNK UPDATE (called every frame) =====
+// ===== CHUNK UPDATE =====
 function updateChunks(px, pz) {
     const cx = Math.floor(px / CHUNK_SIZE);
     const cz = Math.floor(pz / CHUNK_SIZE);
 
     if (cx !== lastPlayerCx || cz !== lastPlayerCz) {
-        lastPlayerCx = cx;
-        lastPlayerCz = cz;
+        lastPlayerCx = cx; lastPlayerCz = cz;
 
         for (const [key] of loadedChunks) {
             const [kcx, kcz] = key.split(',').map(Number);
@@ -223,52 +248,82 @@ function updateChunks(px, pz) {
         chunkQueue.sort((a, b) => a.d - b.d);
     }
 
-    // Load more chunks per frame — 큐가 클수록 빠르게, 적으면 부드럽게
-    const loadRate = chunkQueue.length > 30 ? 6 : chunkQueue.length > 10 ? 4 : 2;
+    // Load 1-2 chunks per frame to avoid spikes
+    const loadRate = chunkQueue.length > 20 ? 2 : 1;
     for (let i = 0; i < loadRate && chunkQueue.length > 0; i++) {
         const { cx: lcx, cz: lcz } = chunkQueue.shift();
         loadChunk(lcx, lcz);
     }
 }
 
-// ===== BLOCK INTERACTION =====
-function addBlock(pos, color) {
-    const x = Math.round(pos.x), y = Math.round(pos.y), z = Math.round(pos.z);
-    const k = bkey(x, y, z);
-    if (blockMap.has(k)) return;
+// ===== DDA VOXEL RAYCAST =====
+// O(range) instead of O(scene_objects) — replaces Three.js raycaster on large arrays
+function voxelRaycast(maxDist) {
+    camera.getWorldPosition(_vrcOrigin);
+    camera.getWorldDirection(_vrcDir);
+    const ox = _vrcOrigin.x, oy = _vrcOrigin.y, oz = _vrcOrigin.z;
+    const dx = _vrcDir.x,    dy = _vrcDir.y,    dz = _vrcDir.z;
 
-    playerMods.set(k, color);
-    const mesh = createBlockMesh(x, y, z, color);
-    registerBlock(mesh);
+    let x = Math.floor(ox), y = Math.floor(oy), z = Math.floor(oz);
 
-    const cxb = Math.floor(x / CHUNK_SIZE), czb = Math.floor(z / CHUNK_SIZE);
-    const chunk = loadedChunks.get(`${cxb},${czb}`);
-    if (chunk) chunk.meshes.push(mesh);
+    const sx = dx >= 0 ? 1 : -1;
+    const sy = dy >= 0 ? 1 : -1;
+    const sz = dz >= 0 ? 1 : -1;
+
+    const tdx = Math.abs(dx) > 1e-9 ? Math.abs(1/dx) : 1e9;
+    const tdy = Math.abs(dy) > 1e-9 ? Math.abs(1/dy) : 1e9;
+    const tdz = Math.abs(dz) > 1e-9 ? Math.abs(1/dz) : 1e9;
+
+    let tmx = dx >= 0 ? (x+1 - ox)*tdx : (ox - x)*tdx;
+    let tmy = dy >= 0 ? (y+1 - oy)*tdy : (oy - y)*tdy;
+    let tmz = dz >= 0 ? (z+1 - oz)*tdz : (oz - z)*tdz;
+
+    let fx = 0, fy = 0, fz = 0;
+
+    for (let i = 0; i < maxDist * 4 + 4; i++) {
+        if (blockMap.has(bkey(x, y, z))) {
+            return { x, y, z, face: new THREE.Vector3(fx, fy, fz) };
+        }
+        if (tmx < tmy && tmx < tmz) {
+            if (tmx > maxDist) break;
+            x += sx; tmx += tdx; fx = -sx; fy = 0;  fz = 0;
+        } else if (tmy < tmz) {
+            if (tmy > maxDist) break;
+            y += sy; tmy += tdy; fx = 0;  fy = -sy; fz = 0;
+        } else {
+            if (tmz > maxDist) break;
+            z += sz; tmz += tdz; fx = 0;  fy = 0;  fz = -sz;
+        }
+    }
+    return null;
 }
 
-function destroyBlock(mesh) {
-    const x = Math.round(mesh.position.x);
-    const y = Math.round(mesh.position.y);
-    const z = Math.round(mesh.position.z);
+// ===== BLOCK INTERACTION =====
+function addBlock(nx, ny, nz, color) {
+    const k = bkey(nx, ny, nz);
+    if (blockMap.has(k)) return;
+    registerBlock(nx, ny, nz, color);
+    flushInstances();
+    playerMods.set(k, color);
+    const cxb   = Math.floor(nx/CHUNK_SIZE), czb = Math.floor(nz/CHUNK_SIZE);
+    const chunk = loadedChunks.get(`${cxb},${czb}`);
+    if (chunk) chunk.blockKeys.push(k);
+}
+
+function destroyBlock(x, y, z) {
     const k = bkey(x, y, z);
-
-    if (playerMods.has(k) && playerMods.get(k) !== null) {
-        playerMods.delete(k);
-    } else {
-        playerMods.set(k, null);
-    }
-
-    unregisterBlock(mesh);
-
-    const cxb = Math.floor(x / CHUNK_SIZE), czb = Math.floor(z / CHUNK_SIZE);
+    if (playerMods.has(k) && playerMods.get(k) !== null) playerMods.delete(k);
+    else playerMods.set(k, null);
+    unregisterBlock(x, y, z);
+    const cxb   = Math.floor(x/CHUNK_SIZE), czb = Math.floor(z/CHUNK_SIZE);
     const chunk = loadedChunks.get(`${cxb},${czb}`);
     if (chunk) {
-        const i = chunk.meshes.indexOf(mesh);
-        if (i !== -1) chunk.meshes.splice(i, 1);
+        const idx = chunk.blockKeys.indexOf(k);
+        if (idx !== -1) chunk.blockKeys.splice(idx, 1);
     }
 }
 
-// ===== COLLISION (O(1) via blockMap) =====
+// ===== COLLISION =====
 function checkHorizontalCollision(px, py, pz) {
     const minBx = Math.floor(px - 0.29), maxBx = Math.floor(px + 0.29);
     const minBz = Math.floor(pz - 0.29), maxBz = Math.floor(pz + 0.29);
@@ -309,14 +364,14 @@ function saveGame() {
     loadingOverlay.style.display = 'flex';
 
     setTimeout(() => {
-        const player = controls.getObject();
+        const player  = controls.getObject();
         const modData = [];
         for (const [k, color] of playerMods) {
             const [x, y, z] = k.split(',').map(Number);
             modData.push({ p: { x, y, z }, c: color });
         }
 
-        const newId = currentSaveId || Date.now();
+        const newId    = currentSaveId || Date.now();
         const saveData = {
             version: 2,
             name: saveName || new Date().toLocaleString(),
@@ -374,7 +429,7 @@ function openLoadMenu() {
 
 window.renameSave = function(id) {
     const saves = JSON.parse(localStorage.getItem('minecraft_saves') || '[]');
-    const idx = saves.findIndex(s => s.id === id);
+    const idx   = saves.findIndex(s => s.id === id);
     if (idx === -1) return;
     const newName = prompt("새로운 월드 이름을 입력하세요:", saves[idx].name || '');
     if (newName !== null && newName.trim() !== '') {
@@ -386,7 +441,7 @@ window.renameSave = function(id) {
 
 window.deleteSave = function(id) {
     const saves = JSON.parse(localStorage.getItem('minecraft_saves') || '[]');
-    const save = saves.find(s => s.id === id);
+    const save  = saves.find(s => s.id === id);
     if (!save) return;
     if (confirm(`'${save.name || save.timestamp}' 월드를 삭제하시겠습니까?`)) {
         localStorage.setItem('minecraft_saves', JSON.stringify(saves.filter(s => s.id !== id)));
@@ -401,20 +456,19 @@ window.loadSpecificSave = function(id) {
     document.getElementById('load-menu').style.display = 'none';
 
     setTimeout(() => {
-        const saves = JSON.parse(localStorage.getItem('minecraft_saves') || '[]');
+        const saves    = JSON.parse(localStorage.getItem('minecraft_saves') || '[]');
         const saveData = saves.find(s => s.id === id);
         if (!saveData) { loadingOverlay.style.display = 'none'; return; }
 
         currentSaveId = id;
 
-        // Unload all chunks
-        for (const [key] of loadedChunks) {
+        for (const [key] of [...loadedChunks]) {
             const [cx, cz] = key.split(',').map(Number);
             unloadChunk(cx, cz);
         }
         playerMods.clear();
         lastPlayerCx = null; lastPlayerCz = null;
-        chunkQueue = [];
+        chunkQueue   = [];
 
         if (saveData.version === 2) {
             for (const mod of (saveData.mods || [])) {
@@ -431,7 +485,6 @@ window.loadSpecificSave = function(id) {
         isFlying = saveData.player.isFlying;
         velocity.set(0, 0, 0);
 
-        // Load center chunks at new position
         const pcx = Math.floor(saveData.player.pos.x / CHUNK_SIZE);
         const pcz = Math.floor(saveData.player.pos.z / CHUNK_SIZE);
         for (let dcx = -2; dcx <= 2; dcx++) {
@@ -452,12 +505,18 @@ function init() {
 
     scene = new THREE.Scene();
     scene.background = new THREE.Color(0x87ceeb);
-    scene.fog = new THREE.Fog(0x87ceeb, 70, 128);  // 렌더 경계(8청크=128블록)에서 완전히 가려짐
+    scene.fog = new THREE.Fog(0x87ceeb, 40, 64);  // 4 chunks = 64 blocks
 
     scene.add(new THREE.AmbientLight(0xcccccc, 1.0));
     const dir = new THREE.DirectionalLight(0xffffff, 1.0);
     dir.position.set(1, 1, 0.5).normalize();
     scene.add(dir);
+
+    // Single shared wireframe for the targeted block
+    highlightMesh = new THREE.LineSegments(edgesGeometry, lineMaterial);
+    highlightMesh.scale.setScalar(1.005);
+    highlightMesh.visible = false;
+    scene.add(highlightMesh);
 
     controls = new PointerLockControls(camera, document.body);
     const blocker      = document.getElementById('blocker');
@@ -483,11 +542,11 @@ function init() {
     // Input
     document.addEventListener('keydown', (e) => {
         switch (e.code) {
-            case 'ArrowUp':   case 'KeyW': moveForward  = true; break;
-            case 'ArrowLeft': case 'KeyA': moveLeft     = true; break;
-            case 'ArrowDown': case 'KeyS': moveBackward = true; break;
-            case 'ArrowRight':case 'KeyD': moveRight    = true; break;
-            case 'Space':
+            case 'ArrowUp':    case 'KeyW': moveForward  = true; break;
+            case 'ArrowLeft':  case 'KeyA': moveLeft     = true; break;
+            case 'ArrowDown':  case 'KeyS': moveBackward = true; break;
+            case 'ArrowRight': case 'KeyD': moveRight    = true; break;
+            case 'Space': {
                 if (e.repeat) break;
                 const now = performance.now();
                 if (now - lastJumpPressTime < doublePressDelay) {
@@ -498,16 +557,17 @@ function init() {
                 if (isFlying) moveUp = true;
                 else if (canJump) { velocity.y += 9.0; canJump = false; }
                 break;
+            }
             case 'ShiftLeft': case 'ShiftRight': if (isFlying) moveDown = true; break;
         }
     });
     document.addEventListener('keyup', (e) => {
         switch (e.code) {
-            case 'ArrowUp':   case 'KeyW': moveForward  = false; break;
-            case 'ArrowLeft': case 'KeyA': moveLeft     = false; break;
-            case 'ArrowDown': case 'KeyS': moveBackward = false; break;
-            case 'ArrowRight':case 'KeyD': moveRight    = false; break;
-            case 'Space': moveUp = false; break;
+            case 'ArrowUp':    case 'KeyW': moveForward  = false; break;
+            case 'ArrowLeft':  case 'KeyA': moveLeft     = false; break;
+            case 'ArrowDown':  case 'KeyS': moveBackward = false; break;
+            case 'ArrowRight': case 'KeyD': moveRight    = false; break;
+            case 'Space': moveUp   = false; break;
             case 'ShiftLeft': case 'ShiftRight': moveDown = false; break;
         }
     });
@@ -524,41 +584,31 @@ function init() {
         inventorySlots[activeSlot].classList.add('active');
     });
 
-    // Block interaction
+    // Block interaction via cached currentTarget (updated each frame)
     document.addEventListener('mousedown', (e) => {
-        if (!controls.isLocked) return;
-        raycaster.setFromCamera(mouse, camera);
-        const pp = controls.getObject().position;
-        const range = 8;
-        const nearby = objects.filter(o => {
-            const dx = o.position.x - pp.x, dy = o.position.y - pp.y, dz = o.position.z - pp.z;
-            return Math.abs(dx) < range && Math.abs(dy) < range && Math.abs(dz) < range;
-        });
-        const intersects = raycaster.intersectObjects(nearby, false);
-        if (intersects.length > 0 && intersects[0].distance < 7) {
-            if (e.button === 0) {
-                destroyBlock(intersects[0].object);
-            } else if (e.button === 2) {
-                const blockInfo = blockTypes[activeSlot];
-                if (blockInfo) {
-                    const newPos = intersects[0].object.position.clone().add(
-                        intersects[0].face.normal.clone().transformDirection(intersects[0].object.matrixWorld)
-                    );
-                    const feetY = pp.y - 1.6, headY = pp.y + 0.2;
-                    const isXO = pp.x+0.4 > newPos.x-0.5 && pp.x-0.4 < newPos.x+0.5;
-                    const isZO = pp.z+0.4 > newPos.z-0.5 && pp.z-0.4 < newPos.z+0.5;
-                    let isYO = headY > newPos.y-0.5 && feetY < newPos.y+0.45;
-                    if (isXO && isZO && feetY > newPos.y+0.1) isYO = false;
-                    if (!(isXO && isZO && isYO)) addBlock(newPos, blockInfo.color);
-                }
-            }
+        if (!controls.isLocked || !currentTarget) return;
+        const { x, y, z, face } = currentTarget;
+
+        if (e.button === 0) {
+            destroyBlock(x, y, z);
+        } else if (e.button === 2) {
+            const blockInfo = blockTypes[activeSlot];
+            if (!blockInfo) return;
+            const nx = x + face.x, ny = y + face.y, nz = z + face.z;
+            const pp    = controls.getObject().position;
+            const feetY = pp.y - 1.6, headY = pp.y + 0.2;
+            const isXO  = pp.x+0.4 > nx-0.5 && pp.x-0.4 < nx+0.5;
+            const isZO  = pp.z+0.4 > nz-0.5 && pp.z-0.4 < nz+0.5;
+            let isYO    = headY > ny-0.5 && feetY < ny+0.45;
+            if (isXO && isZO && feetY > ny+0.1) isYO = false;
+            if (!(isXO && isZO && isYO)) addBlock(nx, ny, nz, blockInfo.color);
         }
     });
     document.addEventListener('contextmenu', (e) => e.preventDefault());
 
-    // Renderer
-    renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
-    renderer.setPixelRatio(window.devicePixelRatio);
+    // Renderer — no antialias, capped pixel ratio
+    renderer = new THREE.WebGLRenderer({ antialias: false, powerPreference: 'high-performance' });
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
     renderer.setSize(window.innerWidth, window.innerHeight);
     document.body.appendChild(renderer.domElement);
     window.addEventListener('resize', () => {
@@ -567,17 +617,15 @@ function init() {
         renderer.setSize(window.innerWidth, window.innerHeight);
     });
 
-    // Initial chunk load (5x5 around origin) — 나머지는 큐에서 처리
+    // Initial chunk load (5x5 around origin)
     for (let dcx = -2; dcx <= 2; dcx++) {
         for (let dcz = -2; dcz <= 2; dcz++) {
             loadChunk(dcx, dcz);
         }
     }
 
-    // Spawn above terrain
     const spawnH = getTerrainHeight(8, 8) + 3;
     controls.getObject().position.set(8, spawnH + 1.6, 8);
-
     prevTime = performance.now();
 }
 
@@ -590,6 +638,15 @@ function animate() {
 
     const player = controls.getObject();
     updateChunks(player.position.x, player.position.z);
+
+    // Update block highlight using DDA raycast
+    currentTarget = controls.isLocked ? voxelRaycast(7) : null;
+    if (currentTarget) {
+        highlightMesh.position.set(currentTarget.x, currentTarget.y, currentTarget.z);
+        highlightMesh.visible = true;
+    } else {
+        highlightMesh.visible = false;
+    }
 
     if (controls.isLocked) {
         velocity.x -= velocity.x * 10.0 * delta;
@@ -628,7 +685,7 @@ function animate() {
             }
         }
 
-        // Vertical movement
+        // Vertical movement & landing
         player.position.y += velocity.y * delta;
         canJump = false;
         const px = player.position.x, py = player.position.y, pz = player.position.z;
