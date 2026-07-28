@@ -5,47 +5,75 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>마인크래프트 프리에디션</title>
     <link rel="icon" type="image/png" href="사진/favicon.png">
-    <link rel="stylesheet" href="style.css?v=20260524232404">
+    <link rel="stylesheet" href="style.css?v=20260728111348">
 </head>
 <body>
+    <!-- 시작 / 일시정지 화면 -->
     <div id="blocker">
         <div id="instructions">
-            <p style="font-size:36px">클릭하여 시작</p>
-            <p>(W, A, S, D = 이동, MOUSE = 둘러보기, SPACE = 점프/비행)</p>
+            <h1>마인크래프트 프리에디션</h1>
+            <p class="big">클릭하여 시작</p>
+            <div class="keys">
+                <span><b>WASD</b> 이동</span><span><b>마우스</b> 시점</span>
+                <span><b>SPACE</b> 점프</span><span><b>SHIFT</b> 웅크리기</span>
+                <span><b>CTRL / W 두번</b> 달리기</span><span><b>좌클릭</b> 파괴 · 공격</span>
+                <span><b>우클릭</b> 설치 · 사용</span><span><b>E</b> 인벤토리</span>
+                <span><b>1~9 / 휠</b> 슬롯 선택</span><span><b>Q</b> 아이템 버리기</span>
+                <span><b>F</b> 게임모드 전환</span><span><b>F3</b> 디버그 화면</span>
+                <span><b>SPACE 두번</b> 비행 (크리에이티브)</span><span><b>ESC</b> 일시정지</span>
+            </div>
             <div id="menu-buttons">
                 <button id="save-btn" class="menu-btn">게임 저장</button>
-                <button id="load-btn" class="menu-btn">게임 불러오기</button>
+                <button id="load-btn" class="menu-btn">월드 불러오기</button>
+                <button id="new-btn" class="menu-btn alt">새 월드 만들기</button>
             </div>
         </div>
     </div>
 
+    <!-- 불러오기 -->
     <div id="load-menu" class="overlay">
         <div class="menu-content">
-            <h2>게임 불러오기</h2>
-            <div id="save-list">
-                <!-- 저장된 게임 목록이 여기에 표시됨 -->
-            </div>
+            <h2>월드 불러오기</h2>
+            <div id="save-list"></div>
             <button id="close-load-btn" class="menu-btn">닫기</button>
         </div>
     </div>
 
+    <!-- 로딩 -->
     <div id="loading-overlay" class="overlay">
         <div class="loading-content">
             <div class="spinner"></div>
-            <p>처리 중...</p>
+            <p>월드를 생성하는 중...</p>
         </div>
     </div>
+
+    <!-- 사망 -->
+    <div id="death-screen" class="overlay">
+        <div class="menu-content">
+            <h2 style="color:#ff5555">죽었습니다!</h2>
+            <button id="respawn-btn" class="menu-btn">리스폰</button>
+        </div>
+    </div>
+
+    <!-- 인게임 GUI (인벤토리 / 제작대 / 화로) -->
+    <div id="gui">
+        <div id="gui-panel"></div>
+    </div>
+    <div id="cursor-item"><div class="icon"></div><span class="count"></span><div class="durbar"><div class="durfill"></div></div></div>
+
+    <!-- HUD -->
+    <div id="water-overlay"></div>
+    <div id="damage-overlay"></div>
     <div id="crosshair"></div>
-    <div id="inventory">
-        <div class="slot active" data-slot="0" data-type="grass"></div>
-        <div class="slot" data-slot="1" data-type="dirt"></div>
-        <div class="slot" data-slot="2" data-type="stone"></div>
-        <div class="slot" data-slot="3" data-type="wood"></div>
-        <div class="slot" data-slot="4" data-type="leaves"></div>
-        <div class="slot" data-slot="5"></div>
-        <div class="slot" data-slot="6"></div>
-        <div class="slot" data-slot="7"></div>
-        <div class="slot" data-slot="8"></div>
+    <pre id="debug"></pre>
+    <div id="hud">
+        <div id="item-name"></div>
+        <div id="bars">
+            <div id="health" class="bar"></div>
+            <div id="hunger" class="bar"></div>
+        </div>
+        <div id="air" class="bar"></div>
+        <div id="hotbar"></div>
     </div>
 
     <script type="importmap">
@@ -56,6 +84,6 @@
             }
         }
     </script>
-    <script type="module" src="main.js?v=20260524232404"></script>
+    <script type="module" src="main.js?v=20260728111348"></script>
 </body>
 </html>

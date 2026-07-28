@@ -1,757 +1,757 @@
+// ===== 마인크래프트 스타일 게임 · 메인 =====
 import * as THREE from 'three';
-import { PointerLockControls } from 'three/addons/controls/PointerLockControls.js';
+import { atlas } from './src/textures.js';
+import { B, blocks, itemOf, breakTime, canHarvest, AIR, TOOL } from './src/blocks.js';
+import { CHUNK_SIZE, WORLD_HEIGHT, SEA_LEVEL, BIOME_INFO } from './src/worldgen.js';
+import { World } from './src/world.js';
+import { materials, sharedUniforms } from './src/chunk.js';
+import { Player, PW, PH } from './src/player.js';
+import { Inventory, Furnace, stack, HOTBAR } from './src/inventory.js';
+import { UI } from './src/ui.js';
+import { Sky } from './src/env.js';
+import { MobManager } from './src/mobs.js';
+import { sfx, resumeAudio } from './src/audio.js';
+import { listSaves, saveGame, applySave, deleteSave, renameSave } from './src/save.js';
 
-// ===== CONFIG =====
-const CHUNK_SIZE      = 16;
-const RENDER_DISTANCE = 4;
-const TERRAIN_DEPTH   = 4;
-const MAX_INSTANCES   = 200000;
+// ---------------- 렌더러 / 씬 ----------------
+const renderer = new THREE.WebGLRenderer({ antialias: false, powerPreference: 'high-performance' });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 1.5));
+renderer.setSize(innerWidth, innerHeight);
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+renderer.autoClear = false;
+document.body.appendChild(renderer.domElement);
 
-// ===== STATE =====
-let camera, scene, renderer, controls;
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(70, innerWidth / innerHeight, 0.06, 1000);
+camera.rotation.order = 'YXZ';
 
-let moveForward = false, moveBackward = false, moveLeft = false, moveRight = false;
-let moveUp = false, moveDown = false, canJump = false;
-let isFlying = false, lastJumpPressTime = 0;
-const doublePressDelay = 200;
+// 1인칭 손(들고 있는 아이템) 전용 씬
+const handScene = new THREE.Scene();
+const handCamera = new THREE.PerspectiveCamera(60, innerWidth / innerHeight, 0.01, 10);
+handScene.add(new THREE.AmbientLight(0xffffff, 1));
+
+addEventListener('resize', () => {
+    camera.aspect = handCamera.aspect = innerWidth / innerHeight;
+    camera.updateProjectionMatrix(); handCamera.updateProjectionMatrix();
+    renderer.setSize(innerWidth, innerHeight);
+});
+
+// ---------------- 게임 상태 ----------------
+const world = new World(scene, (Math.random() * 2147483647) | 0);
+const player = new Player(world);
+const inventory = new Inventory();
+const sky = new Sky(scene, camera);
+const mobs = new MobManager(scene, world);
+
+const game = { world, player, inventory, sky, mobs, camera, scene };
+const ui = new UI(game);
+game.ui = ui;
+
 let currentSaveId = null;
-let prevTime = performance.now();
-const velocity  = new THREE.Vector3();
-const direction = new THREE.Vector3();
+let paused = true;
+let showDebug = false;
+const furnaces = new Map();     // "x,y,z" -> Furnace
 
-let activeSlot = 0;
-const inventorySlots = [];
-const blockTypes = {
-    0: { name: 'grass',  color: 0x44aa44 },
-    1: { name: 'dirt',   color: 0x8b5a2b },
-    2: { name: 'stone',  color: 0x888888 },
-    3: { name: 'wood',   color: 0x634220 },
-    4: { name: 'leaves', color: 0x228b22 }
+// ---------------- 선택 블록 표시 ----------------
+const outline = new THREE.LineSegments(
+    new THREE.EdgesGeometry(new THREE.BoxGeometry(1.001, 1.001, 1.001)),
+    new THREE.LineBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.4 })
+);
+outline.visible = false;
+scene.add(outline);
+
+const crackGeo = new THREE.BoxGeometry(1.002, 1.002, 1.002);
+const crackMat = new THREE.MeshBasicMaterial({
+    map: atlas.texture, transparent: true, depthWrite: false,
+    polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2, fog: false
+});
+const crackMesh = new THREE.Mesh(crackGeo, crackMat);
+crackMesh.visible = false;
+scene.add(crackMesh);
+let crackStage = -1;
+function setCrackStage(s) {
+    if (s === crackStage) return;
+    crackStage = s;
+    if (s < 0) { crackMesh.visible = false; return; }
+    const [u0, v0, u1, v1] = atlas.uv(atlas.id('break' + s));
+    const uv = crackGeo.attributes.uv;
+    for (let i = 0; i < uv.count; i++) {
+        const bx = i % 4;
+        const ux = (bx === 1 || bx === 3) ? 1 : 0;
+        const vy = (bx === 0 || bx === 1) ? 1 : 0;
+        uv.setXY(i, u0 + ux * (u1 - u0), v0 + vy * (v1 - v0));
+    }
+    uv.needsUpdate = true;
+    crackMesh.visible = true;
+}
+
+// ---------------- 아이템 드롭 ----------------
+const dropGeo = new THREE.PlaneGeometry(0.35, 0.35);
+const dropMats = new Map();
+function dropMaterial(texIndex) {
+    if (!dropMats.has(texIndex)) {
+        const m = new THREE.MeshBasicMaterial({ map: atlas.texture, transparent: true, alphaTest: 0.5, side: THREE.DoubleSide });
+        // 아틀라스 타일만 사용하도록 uv 를 옮긴 전용 지오메트리를 쓴다
+        dropMats.set(texIndex, m);
+    }
+    return dropMats.get(texIndex);
+}
+function dropGeometry(texIndex) {
+    const g = dropGeo.clone();
+    const [u0, v0, u1, v1] = atlas.uv(texIndex);
+    const uv = g.attributes.uv;
+    for (let i = 0; i < uv.count; i++) {
+        uv.setXY(i, u0 + uv.getX(i) * (u1 - u0), v0 + uv.getY(i) * (v1 - v0));
+    }
+    uv.needsUpdate = true;
+    return g;
+}
+
+const drops = [];
+function spawnDrop(id, count, x, y, z) {
+    const it = itemOf(id);
+    if (!it) return;
+    const mesh = new THREE.Mesh(dropGeometry(it.tex), dropMaterial(it.tex));
+    mesh.position.set(x, y, z);
+    scene.add(mesh);
+    drops.push({
+        id, count, mesh, age: 0, pickup: 0.5,
+        vel: { x: (Math.random() - 0.5) * 2, y: 3, z: (Math.random() - 0.5) * 2 }
+    });
+}
+
+function updateDrops(dt) {
+    for (let i = drops.length - 1; i >= 0; i--) {
+        const d = drops[i];
+        d.age += dt; d.pickup -= dt;
+        d.vel.y -= 24 * dt;
+        const p = d.mesh.position;
+        const ny = p.y + d.vel.y * dt;
+        if (d.vel.y < 0 && world.isSolid(Math.floor(p.x), Math.floor(ny - 0.15), Math.floor(p.z))) {
+            p.y = Math.floor(ny - 0.15) + 1.18;
+            d.vel.y = 0; d.vel.x *= 0.6; d.vel.z *= 0.6;
+        } else p.y = ny;
+        if (!world.isSolid(Math.floor(p.x + d.vel.x * dt), Math.floor(p.y), Math.floor(p.z))) p.x += d.vel.x * dt;
+        if (!world.isSolid(Math.floor(p.x), Math.floor(p.y), Math.floor(p.z + d.vel.z * dt))) p.z += d.vel.z * dt;
+        d.vel.x *= (1 - 3 * dt); d.vel.z *= (1 - 3 * dt);
+
+        d.mesh.rotation.y += dt * 1.6;
+        d.mesh.position.y += Math.sin(d.age * 3) * 0.0015;
+
+        // 습득 (마인크래프트처럼 가까워지면 빨려 들어온다)
+        const dx = player.pos.x - p.x, dy = (player.pos.y + 0.6) - p.y, dz = player.pos.z - p.z;
+        const dist = Math.hypot(dx, dy, dz);
+        if (d.pickup <= 0 && dist < 2.2) {
+            if (dist > 0.8) { p.x += dx * 7 * dt; p.y += dy * 7 * dt; p.z += dz * 7 * dt; }
+            else {
+                const left = inventory.add(d.id, d.count);
+                if (left < d.count) {
+                    sfx.pop();
+                    if (left === 0) { scene.remove(d.mesh); d.mesh.geometry.dispose(); drops.splice(i, 1); continue; }
+                    d.count = left;
+                }
+            }
+        }
+        if (d.age > 300) { scene.remove(d.mesh); d.mesh.geometry.dispose(); drops.splice(i, 1); }
+    }
+}
+
+mobs.onDrop = (m) => {
+    for (const [id, n] of m.def.drops) spawnDrop(id, 1 + ((Math.random() * n) | 0), m.pos.x, m.pos.y + 0.5, m.pos.z);
 };
 
-// ===== SHARED GEOMETRY =====
-const boxGeometry   = new THREE.BoxGeometry(1, 1, 1);
-const edgesGeometry = new THREE.EdgesGeometry(boxGeometry);
-const lineMaterial  = new THREE.LineBasicMaterial({ color: 0x000000, depthTest: true });
+// ---------------- 손에 든 아이템 ----------------
+let handMesh = null, handKey = '', swing = 0;
+const handGroup = new THREE.Group();
+handScene.add(handGroup);
 
-// ===== WORLD DATA =====
-const loadedChunks = new Map();  // "cx,cz" -> { blockKeys: string[] }
-const blockMap     = new Map();  // "x,y,z" -> { color, id }
-const playerMods   = new Map();  // "x,y,z" -> color | null
-
-// ===== INSTANCED MESH =====
-// One InstancedMesh per color — replaces ~300k individual Mesh objects
-const iMeshes = new Map();  // color -> InstancedMesh
-const iRevMap = new Map();  // color -> string[] (instanceId -> bkey)
-const dummy   = new THREE.Object3D();
-let highlightMesh = null;
-let currentTarget = null;
-
-// Pre-allocated vectors to avoid per-frame allocation
-const _vrcOrigin = new THREE.Vector3();
-const _vrcDir    = new THREE.Vector3();
-
-function getIM(color) {
-    if (!iMeshes.has(color)) {
-        const mat = new THREE.MeshLambertMaterial({
-            color,
-            polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1
-        });
-        const im = new THREE.InstancedMesh(boxGeometry, mat, MAX_INSTANCES);
-        im.count = 0;
-        im.frustumCulled = false;
-        scene.add(im);
-        iMeshes.set(color, im);
-        iRevMap.set(color, []);
+function shadedBoxGeometry(size, def) {
+    const g = new THREE.BoxGeometry(size, size, size);
+    const uv = g.attributes.uv;
+    const col = new Float32Array(uv.count * 3);
+    const SHADE = [0.6, 0.6, 1.0, 0.5, 0.8, 0.8];
+    for (let f = 0; f < 6; f++) {
+        const [u0, v0, u1, v1] = atlas.uv(def.tex[f]);
+        for (let k = 0; k < 4; k++) {
+            const i = f * 4 + k;
+            uv.setXY(i, u0 + uv.getX(i) * (u1 - u0), v0 + uv.getY(i) * (v1 - v0));
+            col[i * 3] = col[i * 3 + 1] = col[i * 3 + 2] = SHADE[f];
+        }
     }
-    return iMeshes.get(color);
+    uv.needsUpdate = true;
+    g.setAttribute('color', new THREE.BufferAttribute(col, 3));
+    return g;
 }
 
-function registerBlock(x, y, z, color) {
-    const k = bkey(x, y, z);
-    if (blockMap.has(k)) return null;
-    const im = getIM(color);
-    if (im.count >= MAX_INSTANCES) return null;
-    const id = im.count++;
-    dummy.position.set(x|0, y|0, z|0);
-    dummy.updateMatrix();
-    im.setMatrixAt(id, dummy.matrix);
-    iRevMap.get(color)[id] = k;
-    blockMap.set(k, { color, id, playerPlaced: false });
-    return k;
-}
-
-function unregisterBlock(x, y, z) {
-    const k    = bkey(x, y, z);
-    const info = blockMap.get(k);
-    if (!info) return;
-    const { color, id } = info;
-    const im     = iMeshes.get(color);
-    const rm     = iRevMap.get(color);
-    const lastId = --im.count;
-    if (id !== lastId) {
-        const tmp = new THREE.Matrix4();
-        im.getMatrixAt(lastId, tmp);
-        im.setMatrixAt(id, tmp);
-        const lastKey = rm[lastId];
-        rm[id] = lastKey;
-        blockMap.get(lastKey).id = id;
+function updateHandMesh() {
+    const s = inventory.held();
+    const key = s ? s.id : 'none';
+    if (key === handKey) return;
+    handKey = key;
+    if (handMesh) { handGroup.remove(handMesh); handMesh.geometry.dispose(); handMesh = null; }
+    if (!s) return;
+    const it = itemOf(s.id);
+    if (!it) return;
+    if (it.block !== null && blocks[it.block].render === 'cube') {
+        handMesh = new THREE.Mesh(
+            shadedBoxGeometry(0.30, blocks[it.block]),
+            new THREE.MeshBasicMaterial({ map: atlas.texture, vertexColors: true, alphaTest: 0.5 })
+        );
+        handMesh.rotation.set(0.15, -0.5, 0.1);
+    } else {
+        handMesh = new THREE.Mesh(
+            dropGeometry(it.tex),
+            new THREE.MeshBasicMaterial({ map: atlas.texture, transparent: true, alphaTest: 0.5, side: THREE.DoubleSide })
+        );
+        handMesh.scale.setScalar(1.3);
+        handMesh.rotation.set(0, -0.35, -0.6);
     }
-    rm[lastId] = undefined;
-    im.instanceMatrix.needsUpdate = true;
-    blockMap.delete(k);
+    handGroup.add(handMesh);
 }
 
-function flushInstances() {
-    for (const im of iMeshes.values()) im.instanceMatrix.needsUpdate = true;
-}
+// ---------------- 입력 ----------------
+const input = { forward: false, back: false, left: false, right: false, jump: false, sneak: false, sprint: false };
+let mouseLeft = false, mouseRight = false;
+let lastSpace = 0, lastW = 0;
 
-// ===== CHUNK QUEUE =====
-let chunkQueue   = [];
-let lastPlayerCx = null, lastPlayerCz = null;
+const canLock = () => !paused && !ui.open;
 
-// ===== NOISE =====
-function hash2(x, z) {
-    let n = (Math.imul(x, 374761393) + Math.imul(z, 1120872981)) | 0;
-    n = Math.imul(n ^ (n >>> 13), 1540483477);
-    return ((n ^ (n >>> 15)) >>> 0) / 0xffffffff;
-}
-function smoothstep(t) { return t * t * (3 - 2 * t); }
-function smoothNoise(x, z) {
-    const ix = Math.floor(x), iz = Math.floor(z);
-    const fx = x - ix, fz = z - iz;
-    const ux = smoothstep(fx), uz = smoothstep(fz);
-    return hash2(ix,iz)*(1-ux)*(1-uz) + hash2(ix+1,iz)*ux*(1-uz)
-         + hash2(ix,iz+1)*(1-ux)*uz   + hash2(ix+1,iz+1)*ux*uz;
-}
-function getTerrainHeight(wx, wz) {
-    let h  = smoothNoise(wx*0.006, wz*0.006) * 35;
-    h     += smoothNoise(wx*0.025, wz*0.025) * 10;
-    h     += smoothNoise(wx*0.1,   wz*0.1)   * 3;
-    return Math.floor(h) + 5;
-}
-function isTreeSpot(wx, wz) {
-    const lx = ((wx % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
-    const lz = ((wz % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
-    if (lx < 3 || lx >= CHUNK_SIZE-3 || lz < 3 || lz >= CHUNK_SIZE-3) return false;
-    return hash2(wx*7+3, wz*13+9) > 0.94;
-}
+document.addEventListener('keydown', (e) => {
+    if (e.code === 'Escape') return;                 // pointerlock 이 처리
+    if (e.repeat && e.code !== 'Space') return;
 
-// ===== BLOCK KEY =====
-function bkey(x, y, z) { return `${x|0},${y|0},${z|0}`; }
-
-// ===== CHUNK GENERATION =====
-function getChunkBlocks(cx, cz) {
-    const result = [];
-    for (let lx = 0; lx < CHUNK_SIZE; lx++) {
-        for (let lz = 0; lz < CHUNK_SIZE; lz++) {
-            const wx = cx * CHUNK_SIZE + lx;
-            const wz = cz * CHUNK_SIZE + lz;
-            const topY = getTerrainHeight(wx, wz);
-            for (let depth = 0; depth <= TERRAIN_DEPTH; depth++) {
-                const y     = topY - depth;
-                const color = depth === 0 ? 0x44aa44 : depth <= 2 ? 0x8b5a2b : 0x888888;
-                result.push({ x: wx, y, z: wz, color });
+    switch (e.code) {
+        case 'KeyW': case 'ArrowUp': {
+            input.forward = true;
+            const now = performance.now();
+            if (now - lastW < 300) player.sprinting = true;
+            lastW = now;
+            break;
+        }
+        case 'KeyS': case 'ArrowDown': input.back = true; break;
+        case 'KeyA': case 'ArrowLeft': input.left = true; break;
+        case 'KeyD': case 'ArrowRight': input.right = true; break;
+        case 'ShiftLeft': case 'ShiftRight': input.sneak = true; break;
+        case 'ControlLeft': case 'ControlRight': if (input.forward) player.sprinting = true; break;
+        case 'Space': {
+            if (e.repeat) { input.jump = true; break; }
+            input.jump = true;
+            const now = performance.now();
+            if (now - lastSpace < 300 && player.gamemode === 'creative') {
+                player.flying = !player.flying;
+                player.vel.y = 0;
             }
-            if (isTreeSpot(wx, wz)) {
-                const base = topY + 1;
-                for (let ty = 0; ty < 5; ty++) {
-                    result.push({ x: wx, y: base+ty, z: wz, color: 0x634220 });
-                }
-                for (let ly = 2; ly <= 5; ly++) {
-                    const r = ly < 5 ? 2 : 1;
-                    for (let dlx = -r; dlx <= r; dlx++) {
-                        for (let dlz = -r; dlz <= r; dlz++) {
-                            if (Math.abs(dlx)===r && Math.abs(dlz)===r) continue;
-                            result.push({ x: wx+dlx, y: base+ly, z: wz+dlz, color: 0x228b22 });
-                        }
-                    }
-                }
-            }
+            lastSpace = now;
+            break;
         }
+        case 'KeyE':
+            if (ui.open) closeGui();
+            else if (!paused) openGui(player.gamemode === 'creative' ? 'creative' : 'inventory');
+            break;
+        case 'KeyQ': dropHeld(); break;
+        case 'F3': e.preventDefault(); showDebug = !showDebug; ui.debugEl.style.display = showDebug ? 'block' : 'none'; break;
+        case 'KeyF': toggleGamemode(); break;
+        case 'Digit1': case 'Digit2': case 'Digit3': case 'Digit4': case 'Digit5':
+        case 'Digit6': case 'Digit7': case 'Digit8': case 'Digit9':
+            selectSlot(+e.code.slice(5) - 1); break;
     }
-    return result;
+});
+
+document.addEventListener('keyup', (e) => {
+    switch (e.code) {
+        case 'KeyW': case 'ArrowUp': input.forward = false; player.sprinting = false; break;
+        case 'KeyS': case 'ArrowDown': input.back = false; break;
+        case 'KeyA': case 'ArrowLeft': input.left = false; break;
+        case 'KeyD': case 'ArrowRight': input.right = false; break;
+        case 'ShiftLeft': case 'ShiftRight': input.sneak = false; break;
+        case 'Space': input.jump = false; break;
+    }
+});
+
+document.addEventListener('mousemove', (e) => {
+    if (document.pointerLockElement !== document.body) return;
+    const s = 0.0022;
+    player.yaw -= e.movementX * s;
+    player.pitch -= e.movementY * s;
+    player.pitch = Math.max(-Math.PI / 2 + 0.001, Math.min(Math.PI / 2 - 0.001, player.pitch));
+});
+
+// 포인터 락 중에는 마우스 이벤트가 잠긴 요소(document.body)로 전달되므로
+// 캔버스가 아니라 document 에 붙여야 한다.
+document.addEventListener('mousedown', (e) => {
+    if (document.pointerLockElement !== document.body) return;
+    if (e.button === 0) { mouseLeft = true; tryAttack(); }
+    if (e.button === 2) { mouseRight = true; useHeld(); }
+});
+addEventListener('mouseup', (e) => {
+    if (e.button === 0) { mouseLeft = false; resetBreak(); }
+    if (e.button === 2) { mouseRight = false; eatTimer = 0; }
+});
+addEventListener('contextmenu', e => e.preventDefault());
+
+addEventListener('wheel', (e) => {
+    if (!canLock() || document.pointerLockElement !== document.body) return;
+    selectSlot((inventory.selected + (e.deltaY > 0 ? 1 : HOTBAR - 1)) % HOTBAR);
+}, { passive: true });
+
+function selectSlot(i) {
+    inventory.selected = i;
+    const s = inventory.held();
+    if (s) ui.showItemName(itemOf(s.id)?.display ?? s.id);
+    resetBreak();
 }
 
-function loadChunk(cx, cz) {
-    const key = `${cx},${cz}`;
-    if (loadedChunks.has(key)) return;
-
-    const blockKeys = [];
-    const blocks    = getChunkBlocks(cx, cz);
-    const minX = cx * CHUNK_SIZE, maxX = (cx+1) * CHUNK_SIZE;
-    const minZ = cz * CHUNK_SIZE, maxZ = (cz+1) * CHUNK_SIZE;
-
-    for (const { x, y, z, color } of blocks) {
-        const k = bkey(x, y, z);
-        if (blockMap.has(k)) continue;
-        if (playerMods.has(k)) {
-            const modColor = playerMods.get(k);
-            if (modColor !== null) {
-                const rk = registerBlock(x, y, z, modColor);
-                if (rk) blockKeys.push(rk);
-            }
-            continue;
-        }
-        const rk = registerBlock(x, y, z, color);
-        if (rk) blockKeys.push(rk);
-    }
-
-    for (const [k, modColor] of playerMods) {
-        if (modColor === null || blockMap.has(k)) continue;
-        const [bx, by, bz] = k.split(',').map(Number);
-        if (bx >= minX && bx < maxX && bz >= minZ && bz < maxZ) {
-            const rk = registerBlock(bx, by, bz, modColor);
-            if (rk) blockKeys.push(rk);
-        }
-    }
-
-    flushInstances();
-    loadedChunks.set(key, { blockKeys });
+function dropHeld() {
+    const s = inventory.held();
+    if (!s || ui.open) return;
+    const dir = getLookDir();
+    spawnDrop(s.id, 1, player.pos.x + dir.x, player.eyeY - 0.3, player.pos.z + dir.z);
+    const d = drops[drops.length - 1];
+    if (d) { d.vel.x = dir.x * 6; d.vel.y = 2.5; d.vel.z = dir.z * 6; d.pickup = 1.2; }
+    inventory.consumeHeld(1);
 }
 
-function unloadChunk(cx, cz) {
-    const key   = `${cx},${cz}`;
-    const chunk = loadedChunks.get(key);
-    if (!chunk) return;
-    for (const k of chunk.blockKeys) {
-        const [x, y, z] = k.split(',').map(Number);
-        unregisterBlock(x, y, z);
-    }
-    loadedChunks.delete(key);
+function toggleGamemode() {
+    player.gamemode = player.gamemode === 'survival' ? 'creative' : 'survival';
+    if (player.gamemode === 'survival') player.flying = false;
+    ui.showItemName('게임 모드: ' + (player.gamemode === 'creative' ? '크리에이티브' : '서바이벌'));
 }
 
-// ===== CHUNK UPDATE =====
-function updateChunks(px, pz) {
-    const cx = Math.floor(px / CHUNK_SIZE);
-    const cz = Math.floor(pz / CHUNK_SIZE);
+// ---------------- 포인터 락 / 메뉴 ----------------
+const blocker = document.getElementById('blocker');
+const pauseMenu = document.getElementById('pause-menu');
 
-    if (cx !== lastPlayerCx || cz !== lastPlayerCz) {
-        lastPlayerCx = cx; lastPlayerCz = cz;
+function lockPointer() { document.body.requestPointerLock(); }
 
-        for (const [key] of loadedChunks) {
-            const [kcx, kcz] = key.split(',').map(Number);
-            if (Math.abs(kcx-cx) > RENDER_DISTANCE+1 || Math.abs(kcz-cz) > RENDER_DISTANCE+1) {
-                unloadChunk(kcx, kcz);
-            }
-        }
-
-        chunkQueue = [];
-        for (let dcx = -RENDER_DISTANCE; dcx <= RENDER_DISTANCE; dcx++) {
-            for (let dcz = -RENDER_DISTANCE; dcz <= RENDER_DISTANCE; dcz++) {
-                const ncx = cx+dcx, ncz = cz+dcz;
-                if (!loadedChunks.has(`${ncx},${ncz}`)) {
-                    chunkQueue.push({ cx: ncx, cz: ncz, d: Math.abs(dcx)+Math.abs(dcz) });
-                }
-            }
-        }
-        chunkQueue.sort((a, b) => a.d - b.d);
+document.addEventListener('pointerlockchange', () => {
+    const locked = document.pointerLockElement === document.body;
+    if (locked) {
+        paused = false;
+        blocker.style.display = 'none';
+        resumeAudio();
+    } else if (!ui.open) {
+        paused = true;
+        blocker.style.display = 'flex';
+        mouseLeft = mouseRight = false;
+        resetBreak();
     }
+});
 
-    // Load 1-2 chunks per frame to avoid spikes
-    const loadRate = chunkQueue.length > 20 ? 2 : 1;
-    for (let i = 0; i < loadRate && chunkQueue.length > 0; i++) {
-        const { cx: lcx, cz: lcz } = chunkQueue.shift();
-        loadChunk(lcx, lcz);
-    }
+blocker.addEventListener('click', (e) => {
+    if (e.target.tagName === 'BUTTON') return;
+    if (document.getElementById('load-menu').style.display === 'flex') return;
+    lockPointer();
+});
+
+function openGui(kind, furnace = null) {
+    ui.openScreen(kind, furnace);
+    if (document.pointerLockElement) document.exitPointerLock();
+    mouseLeft = mouseRight = false;
+    resetBreak();
+}
+function closeGui() {
+    ui.close();
+    lockPointer();
+}
+document.addEventListener('keydown', (e) => {
+    if (e.code === 'Escape' && ui.open) { e.preventDefault(); ui.close(); paused = true; blocker.style.display = 'flex'; }
+});
+
+// ---------------- 블록 상호작용 ----------------
+const _dir = new THREE.Vector3();
+function getLookDir() {
+    _dir.set(0, 0, -1).applyQuaternion(camera.quaternion);
+    return _dir;
 }
 
-// ===== DDA VOXEL RAYCAST =====
-// O(range) instead of O(scene_objects) — replaces Three.js raycaster on large arrays
-// Blocks are centered at integers (occupy n±0.5), so we use Math.round for the starting
-// block and ±0.5 boundaries — NOT Math.floor which is misaligned with block centers.
-function voxelRaycast(maxDist) {
-    camera.getWorldPosition(_vrcOrigin);
-    camera.getWorldDirection(_vrcDir);
-    const ox = _vrcOrigin.x, oy = _vrcOrigin.y, oz = _vrcOrigin.z;
-    const dx = _vrcDir.x,    dy = _vrcDir.y,    dz = _vrcDir.z;
+let target = null;
+let breakProgress = 0, breakTarget = null;
 
-    // Block at integer n occupies [n-0.5, n+0.5]; use round to find correct starting block
-    let x = Math.round(ox), y = Math.round(oy), z = Math.round(oz);
-
-    const sx = dx >= 0 ? 1 : -1;
-    const sy = dy >= 0 ? 1 : -1;
-    const sz = dz >= 0 ? 1 : -1;
-
-    const tdx = Math.abs(dx) > 1e-9 ? Math.abs(1/dx) : 1e9;
-    const tdy = Math.abs(dy) > 1e-9 ? Math.abs(1/dy) : 1e9;
-    const tdz = Math.abs(dz) > 1e-9 ? Math.abs(1/dz) : 1e9;
-
-    // Distance to the first block-face boundary (at x±0.5) in each direction
-    let tmx = dx >= 0 ? (x + 0.5 - ox)*tdx : (ox - x + 0.5)*tdx;
-    let tmy = dy >= 0 ? (y + 0.5 - oy)*tdy : (oy - y + 0.5)*tdy;
-    let tmz = dz >= 0 ? (z + 0.5 - oz)*tdz : (oz - z + 0.5)*tdz;
-
-    let fx = 0, fy = 0, fz = 0;
-
-    for (let i = 0; i < maxDist * 4 + 4; i++) {
-        if (blockMap.has(bkey(x, y, z))) {
-            return { x, y, z, face: new THREE.Vector3(fx, fy, fz) };
-        }
-        if (tmx < tmy && tmx < tmz) {
-            if (tmx > maxDist) break;
-            x += sx; tmx += tdx; fx = -sx; fy = 0;  fz = 0;
-        } else if (tmy < tmz) {
-            if (tmy > maxDist) break;
-            y += sy; tmy += tdy; fx = 0;  fy = -sy; fz = 0;
-        } else {
-            if (tmz > maxDist) break;
-            z += sz; tmz += tdz; fx = 0;  fy = 0;  fz = -sz;
-        }
-    }
-    return null;
+function resetBreak() {
+    breakProgress = 0; breakTarget = null;
+    setCrackStage(-1);
 }
 
-// ===== BLOCK INTERACTION =====
-function addBlock(nx, ny, nz, color) {
-    const k = bkey(nx, ny, nz);
-    if (blockMap.has(k)) return;
-    registerBlock(nx, ny, nz, color);
-    const info = blockMap.get(k);
-    if (info) info.playerPlaced = true;
-    flushInstances();
-    playerMods.set(k, color);
-    const cxb   = Math.floor(nx/CHUNK_SIZE), czb = Math.floor(nz/CHUNK_SIZE);
-    const chunk = loadedChunks.get(`${cxb},${czb}`);
-    if (chunk) chunk.blockKeys.push(k);
+function reach() { return player.gamemode === 'creative' ? 5 : 4.5; }
+
+function updateTarget() {
+    const origin = { x: player.pos.x, y: player.eyeY, z: player.pos.z };
+    const d = getLookDir();
+    target = world.raycast(origin, d, reach());
+    if (target) {
+        outline.position.set(target.x + 0.5, target.y + 0.5, target.z + 0.5);
+        outline.visible = true;
+    } else outline.visible = false;
+}
+
+function tryAttack() {
+    // 몹 공격 우선
+    const origin = { x: player.pos.x, y: player.eyeY, z: player.pos.z };
+    const d = getLookDir();
+    const mob = mobs.pick(origin, d, 3.5);
+    if (mob) {
+        const it = inventory.heldItem();
+        mob.hurt(it ? it.damage : 1);
+        if (it?.tool) inventory.damageHeld(1);
+        swing = 1;
+        return;
+    }
+    swing = 1;
+}
+
+function updateBreaking(dt) {
+    if (!mouseLeft || !target || ui.open || player.dead) { if (breakTarget) resetBreak(); return; }
+    const key = target.x + ',' + target.y + ',' + target.z;
+    if (breakTarget !== key) { breakTarget = key; breakProgress = 0; }
+
+    const def = blocks[target.block];
+    const held = inventory.heldItem();
+    const t = breakTime(def, held);
+    if (t === Infinity) { setCrackStage(-1); return; }
+
+    if (player.gamemode === 'creative') { destroyBlock(target.x, target.y, target.z); return; }
+
+    breakProgress += dt;
+    if (breakProgress >= t) { destroyBlock(target.x, target.y, target.z); return; }
+
+    const stage = Math.min(9, Math.floor(breakProgress / t * 10));
+    crackMesh.position.set(target.x + 0.5, target.y + 0.5, target.z + 0.5);
+    setCrackStage(stage);
+    if (Math.random() < dt * 6) sfx.dig(def.stepSound);
 }
 
 function destroyBlock(x, y, z) {
-    const k = bkey(x, y, z);
-    if (playerMods.has(k) && playerMods.get(k) !== null) playerMods.delete(k);
-    else playerMods.set(k, null);
-    unregisterBlock(x, y, z);
-    const cxb   = Math.floor(x/CHUNK_SIZE), czb = Math.floor(z/CHUNK_SIZE);
-    const chunk = loadedChunks.get(`${cxb},${czb}`);
-    if (chunk) {
-        const idx = chunk.blockKeys.indexOf(k);
-        if (idx !== -1) chunk.blockKeys.splice(idx, 1);
+    const id = world.getBlock(x, y, z);
+    if (id === AIR) return;
+    const def = blocks[id];
+    if (def.hardness < 0) return;
+
+    world.setBlock(x, y, z, AIR);
+    sfx.breakBlock(def.stepSound);
+
+    if (player.gamemode === 'survival') {
+        const held = inventory.heldItem();
+        if (def.drop && canHarvest(def, held)) {
+            spawnDrop(def.drop, def.dropCount, x + 0.5, y + 0.5, z + 0.5);
+        }
+        if (held?.tool) inventory.damageHeld(1);
+        player.exhaustion += 0.005;
     }
+    furnaces.delete(x + ',' + y + ',' + z);
+    world.blockUpdate(x, y, z);
+    resetBreak();
+    swing = 1;
 }
 
-// ===== COLLISION =====
-function checkHorizontalCollision(px, py, pz) {
-    const minBx = Math.ceil(px - 0.75), maxBx = Math.floor(px + 0.75);
-    const minBz = Math.ceil(pz - 0.75), maxBz = Math.floor(pz + 0.75);
-    const minBy = Math.ceil(py - 1.55),  maxBy = Math.floor(py + 0.15);
-    for (let bx = minBx; bx <= maxBx; bx++) {
-        for (let bz = minBz; bz <= maxBz; bz++) {
-            for (let by = minBy; by <= maxBy; by++) {
-                if (blockMap.has(bkey(bx, by, bz))) return true;
-            }
+let eatTimer = 0;
+function useHeld() {
+    if (ui.open || player.dead) return;
+    swing = 1;
+
+    // 1) 블록 사용 (제작대 · 화로)
+    if (target && !input.sneak) {
+        const id = world.getBlock(target.x, target.y, target.z);
+        if (id === B.CRAFTING_TABLE) { openGui('crafting'); return; }
+        if (id === B.FURNACE) {
+            const k = target.x + ',' + target.y + ',' + target.z;
+            if (!furnaces.has(k)) furnaces.set(k, new Furnace());
+            openGui('furnace', furnaces.get(k));
+            return;
         }
     }
-    return false;
+
+    const s = inventory.held();
+    if (!s) return;
+    const it = itemOf(s.id);
+    if (!it) return;
+
+    // 2) 음식
+    if (it.food) { eatTimer = 0.0001; return; }
+
+    // 3) 블록 설치
+    if (it.block !== null && target) {
+        const nx = target.x + target.nx, ny = target.y + target.ny, nz = target.z + target.nz;
+        placeBlock(nx, ny, nz, it.block);
+    }
 }
 
+function placeBlock(x, y, z, id) {
+    if (y < 0 || y >= WORLD_HEIGHT) return;
+    const existing = world.getBlock(x, y, z);
+    if (existing !== AIR && blocks[existing].render !== 'liquid') return;
 
-// ===== SAVE / LOAD =====
-function saveGame() {
-    const saves = JSON.parse(localStorage.getItem('minecraft_saves') || '[]');
-    let saveName = '';
+    const def = blocks[id];
+    // 플레이어와 겹치는지 검사
+    if (def.solid) {
+        const hw = PW / 2;
+        const px0 = player.pos.x - hw, px1 = player.pos.x + hw;
+        const pz0 = player.pos.z - hw, pz1 = player.pos.z + hw;
+        const py0 = player.pos.y, py1 = player.pos.y + player.height;
+        if (px1 > x && px0 < x + 1 && pz1 > z && pz0 < z + 1 && py1 > y && py0 < y + 1) return;
+        for (const m of mobs.mobs) {
+            const mw = m.def.w / 2;
+            if (m.pos.x + mw > x && m.pos.x - mw < x + 1 && m.pos.z + mw > z && m.pos.z - mw < z + 1
+                && m.pos.y + m.def.h > y && m.pos.y < y + 1) return;
+        }
+    }
+    // 지지 블록이 필요한 블록
+    if (def.needsSupport && !world.isSolid(x, y - 1, z) && world.getBlock(x, y - 1, z) !== id) return;
 
+    if (!world.setBlock(x, y, z, id)) return;
+    sfx.place(def.stepSound);
+    if (player.gamemode === 'survival') inventory.consumeHeld(1);
+    world.blockUpdate(x, y, z);
+}
+
+function updateEating(dt) {
+    if (!mouseRight || eatTimer <= 0) { eatTimer = 0; return; }
+    const s = inventory.held();
+    const it = s ? itemOf(s.id) : null;
+    if (!it?.food) { eatTimer = 0; return; }
+    eatTimer += dt;
+    if (eatTimer % 0.35 < dt) sfx.eat();
+    if (eatTimer >= 1.6) {
+        if (player.eat(it.food)) inventory.consumeHeld(1);
+        eatTimer = 0;
+    }
+}
+
+// ---------------- 메뉴 버튼 ----------------
+document.getElementById('save-btn').onclick = (e) => { e.stopPropagation(); doSave(); };
+document.getElementById('load-btn').onclick = (e) => { e.stopPropagation(); openLoadMenu(); };
+document.getElementById('new-btn').onclick = (e) => { e.stopPropagation(); newWorld(); };
+document.getElementById('close-load-btn').onclick = () => { document.getElementById('load-menu').style.display = 'none'; };
+
+function doSave() {
+    const saves = listSaves();
+    let name = '';
     if (currentSaveId) {
-        const existing = saves.find(s => s.id === currentSaveId);
-        if (existing) {
-            const overwrite = confirm(`'${existing.name || existing.timestamp}' 월드에 덮어쓰시겠습니까?`);
-            if (!overwrite) {
-                currentSaveId = null;
-            } else {
-                saveName = prompt("저장할 이름을 입력하세요:", existing.name || '');
-                if (saveName === null) return;
-            }
+        const ex = saves.find(s => s.id === currentSaveId);
+        if (ex) {
+            if (!confirm(`'${ex.name}' 월드에 덮어쓰시겠습니까?`)) currentSaveId = null;
+            else name = ex.name;
         }
     }
     if (!currentSaveId) {
-        saveName = prompt("새로운 저장 이름을 입력하세요:", "새 월드");
-        if (saveName === null) return;
+        name = prompt('저장할 월드 이름:', '새 월드');
+        if (name === null) return;
     }
-
-    const loadingOverlay = document.getElementById('loading-overlay');
-    loadingOverlay.style.display = 'flex';
-
-    setTimeout(() => {
-        const player  = controls.getObject();
-        const modData = [];
-        for (const [k, color] of playerMods) {
-            const [x, y, z] = k.split(',').map(Number);
-            modData.push({ p: { x, y, z }, c: color });
-        }
-
-        const newId    = currentSaveId || Date.now();
-        const saveData = {
-            version: 2,
-            name: saveName || new Date().toLocaleString(),
-            timestamp: new Date().toLocaleString(),
-            id: newId,
-            player: {
-                pos: { x: player.position.x, y: player.position.y, z: player.position.z },
-                rot: { x: camera.rotation.x, y: player.rotation.y },
-                isFlying
-            },
-            mods: modData
-        };
-
-        if (currentSaveId) {
-            const idx = saves.findIndex(s => s.id === currentSaveId);
-            if (idx !== -1) saves[idx] = saveData;
-            else saves.push(saveData);
-        } else {
-            saves.push(saveData);
-            currentSaveId = newId;
-        }
-
-        localStorage.setItem('minecraft_saves', JSON.stringify(saves));
-        loadingOverlay.style.display = 'none';
-        alert('게임이 저장되었습니다!');
-    }, 300);
+    const id = saveGame(game, name, currentSaveId);
+    if (id) { currentSaveId = id; ui.showItemName('저장 완료'); alert('게임이 저장되었습니다!'); }
 }
 
 function openLoadMenu() {
-    const loadMenu = document.getElementById('load-menu');
-    const saveList = document.getElementById('save-list');
-    saveList.innerHTML = '';
-    const saves = JSON.parse(localStorage.getItem('minecraft_saves') || '[]');
-    if (saves.length === 0) {
-        saveList.innerHTML = '<p>저장된 게임이 없습니다.</p>';
-    } else {
-        saves.sort((a, b) => b.id - a.id).forEach(save => {
-            const div = document.createElement('div');
-            div.className = 'save-item';
-            div.innerHTML = `
-                <div style="text-align:left;flex-grow:1;">
-                    <div style="font-weight:bold;">${save.name || '이름 없음'}</div>
-                    <div style="font-size:0.8em;color:#ccc;">${save.timestamp}${save.version !== 2 ? ' (구버전)' : ''}</div>
-                </div>
-                <div style="display:flex;gap:5px;">
-                    <button onclick="window.loadSpecificSave(${save.id})" style="background-color:#2196F3;">플레이</button>
-                    <button onclick="window.renameSave(${save.id})" style="background-color:#FF9800;">이름 변경</button>
-                    <button onclick="window.deleteSave(${save.id})" style="background-color:#f44336;">삭제</button>
-                </div>`;
-            saveList.appendChild(div);
-        });
+    const menu = document.getElementById('load-menu');
+    const list = document.getElementById('save-list');
+    list.innerHTML = '';
+    const saves = listSaves().sort((a, b) => b.id - a.id);
+    if (!saves.length) list.innerHTML = '<p>저장된 월드가 없습니다.</p>';
+    for (const s of saves) {
+        const div = document.createElement('div');
+        div.className = 'save-item';
+        div.innerHTML = `<div style="text-align:left;flex:1">
+                <div style="font-weight:bold">${escapeHtml(s.name || '이름 없음')}</div>
+                <div style="font-size:.8em;color:#bbb">${s.timestamp}${s.version < 3 ? ' · 구버전' : ''}</div>
+            </div>`;
+        const btns = document.createElement('div');
+        btns.style.cssText = 'display:flex;gap:6px';
+        const mk = (label, color, fn) => {
+            const b = document.createElement('button');
+            b.textContent = label; b.style.background = color; b.onclick = fn; btns.appendChild(b);
+        };
+        mk('플레이', '#2196F3', () => loadWorld(s.id));
+        mk('이름변경', '#FF9800', () => { const n = prompt('새 이름:', s.name); if (n) { renameSave(s.id, n.trim()); openLoadMenu(); } });
+        mk('삭제', '#f44336', () => { if (confirm('삭제하시겠습니까?')) { deleteSave(s.id); if (currentSaveId === s.id) currentSaveId = null; openLoadMenu(); } });
+        div.appendChild(btns);
+        list.appendChild(div);
     }
-    loadMenu.style.display = 'flex';
+    menu.style.display = 'flex';
 }
+function escapeHtml(s) { return String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
 
-window.renameSave = function(id) {
-    const saves = JSON.parse(localStorage.getItem('minecraft_saves') || '[]');
-    const idx   = saves.findIndex(s => s.id === id);
-    if (idx === -1) return;
-    const newName = prompt("새로운 월드 이름을 입력하세요:", saves[idx].name || '');
-    if (newName !== null && newName.trim() !== '') {
-        saves[idx].name = newName.trim();
-        localStorage.setItem('minecraft_saves', JSON.stringify(saves));
-        openLoadMenu();
-    }
-};
+function showLoading(on) { document.getElementById('loading-overlay').style.display = on ? 'flex' : 'none'; }
 
-window.deleteSave = function(id) {
-    const saves = JSON.parse(localStorage.getItem('minecraft_saves') || '[]');
-    const save  = saves.find(s => s.id === id);
-    if (!save) return;
-    if (confirm(`'${save.name || save.timestamp}' 월드를 삭제하시겠습니까?`)) {
-        localStorage.setItem('minecraft_saves', JSON.stringify(saves.filter(s => s.id !== id)));
-        if (currentSaveId === id) currentSaveId = null;
-        openLoadMenu();
-    }
-};
-
-window.loadSpecificSave = function(id) {
-    const loadingOverlay = document.getElementById('loading-overlay');
-    loadingOverlay.style.display = 'flex';
+function loadWorld(id) {
+    const data = listSaves().find(s => s.id === id);
+    if (!data) return;
+    showLoading(true);
     document.getElementById('load-menu').style.display = 'none';
-
     setTimeout(() => {
-        const saves    = JSON.parse(localStorage.getItem('minecraft_saves') || '[]');
-        const saveData = saves.find(s => s.id === id);
-        if (!saveData) { loadingOverlay.style.display = 'none'; return; }
-
         currentSaveId = id;
-
-        for (const [key] of [...loadedChunks]) {
-            const [cx, cz] = key.split(',').map(Number);
-            unloadChunk(cx, cz);
-        }
-        playerMods.clear();
-        lastPlayerCx = null; lastPlayerCz = null;
-        chunkQueue   = [];
-
-        if (saveData.version === 2) {
-            for (const mod of (saveData.mods || [])) {
-                playerMods.set(bkey(mod.p.x, mod.p.y, mod.p.z), mod.c);
-            }
-        } else {
-            alert('구버전 저장 파일입니다. 플레이어 위치만 복원됩니다.');
-        }
-
-        const player = controls.getObject();
-        player.position.set(saveData.player.pos.x, saveData.player.pos.y, saveData.player.pos.z);
-        player.rotation.set(0, saveData.player.rot.y, 0);
-        camera.rotation.set(saveData.player.rot.x || 0, 0, 0);
-        isFlying = saveData.player.isFlying;
-        velocity.set(0, 0, 0);
-
-        const pcx = Math.floor(saveData.player.pos.x / CHUNK_SIZE);
-        const pcz = Math.floor(saveData.player.pos.z / CHUNK_SIZE);
-        for (let dcx = -2; dcx <= 2; dcx++) {
-            for (let dcz = -2; dcz <= 2; dcz++) {
-                loadChunk(pcx+dcx, pcz+dcz);
-            }
-        }
-
-        loadingOverlay.style.display = 'none';
-        controls.lock();
-    }, 500);
-};
-
-// ===== INIT =====
-function init() {
-    camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
-    camera.rotation.order = 'YXZ';
-
-    scene = new THREE.Scene();
-    scene.background = new THREE.Color(0x87ceeb);
-    scene.fog = new THREE.Fog(0x87ceeb, 40, 64);  // 4 chunks = 64 blocks
-
-    scene.add(new THREE.AmbientLight(0xcccccc, 1.0));
-    const dir = new THREE.DirectionalLight(0xffffff, 1.0);
-    dir.position.set(1, 1, 0.5).normalize();
-    scene.add(dir);
-
-    // Single shared wireframe for the targeted block
-    highlightMesh = new THREE.LineSegments(edgesGeometry, lineMaterial);
-    highlightMesh.scale.setScalar(1.005);
-    highlightMesh.visible = false;
-    scene.add(highlightMesh);
-
-    controls = new PointerLockControls(camera, document.body);
-    const blocker      = document.getElementById('blocker');
-    const instructions = document.getElementById('instructions');
-    const loadMenu     = document.getElementById('load-menu');
-
-    blocker.addEventListener('click', (e) => { if (e.target.tagName !== 'BUTTON') controls.lock(); });
-    document.getElementById('save-btn').addEventListener('click', (e) => { e.stopPropagation(); saveGame(); });
-    document.getElementById('load-btn').addEventListener('click', (e) => { e.stopPropagation(); openLoadMenu(); });
-    document.getElementById('close-load-btn').addEventListener('click', () => { loadMenu.style.display = 'none'; });
-
-    controls.addEventListener('lock', () => {
-        instructions.style.display = 'none';
-        blocker.style.display = 'none';
-    });
-    controls.addEventListener('unlock', () => {
-        blocker.style.display = 'flex';
-        instructions.style.display = 'flex';
-        loadMenu.style.display = 'none';
-    });
-    scene.add(controls.getObject());
-
-    // Input
-    document.addEventListener('keydown', (e) => {
-        switch (e.code) {
-            case 'ArrowUp':    case 'KeyW': moveForward  = true; break;
-            case 'ArrowLeft':  case 'KeyA': moveLeft     = true; break;
-            case 'ArrowDown':  case 'KeyS': moveBackward = true; break;
-            case 'ArrowRight': case 'KeyD': moveRight    = true; break;
-            case 'Space': {
-                if (e.repeat) break;
-                const now = performance.now();
-                if (now - lastJumpPressTime < doublePressDelay) {
-                    isFlying = !isFlying;
-                    if (isFlying) velocity.y = 0;
-                }
-                lastJumpPressTime = now;
-                if (isFlying) moveUp = true;
-                else if (canJump) { velocity.y += 9.0; canJump = false; }
-                break;
-            }
-            case 'ShiftLeft': case 'ShiftRight': if (isFlying) moveDown = true; break;
-        }
-    });
-    document.addEventListener('keyup', (e) => {
-        switch (e.code) {
-            case 'ArrowUp':    case 'KeyW': moveForward  = false; break;
-            case 'ArrowLeft':  case 'KeyA': moveLeft     = false; break;
-            case 'ArrowDown':  case 'KeyS': moveBackward = false; break;
-            case 'ArrowRight': case 'KeyD': moveRight    = false; break;
-            case 'Space': moveUp   = false; break;
-            case 'ShiftLeft': case 'ShiftRight': moveDown = false; break;
-        }
-    });
-
-    // Inventory
-    for (let i = 0; i < 9; i++) {
-        const slot = document.querySelector(`.slot[data-slot="${i}"]`);
-        if (slot) inventorySlots.push(slot);
-    }
-    document.addEventListener('wheel', (e) => {
-        if (!controls.isLocked) return;
-        inventorySlots[activeSlot].classList.remove('active');
-        activeSlot = (activeSlot + (e.deltaY > 0 ? 1 : 8)) % 9;
-        inventorySlots[activeSlot].classList.add('active');
-    });
-
-    // Block interaction via cached currentTarget (updated each frame)
-    document.addEventListener('mousedown', (e) => {
-        if (!controls.isLocked || !currentTarget) return;
-        const { x, y, z, face } = currentTarget;
-
-        if (e.button === 0) {
-            destroyBlock(x, y, z);
-        } else if (e.button === 2) {
-            const blockInfo = blockTypes[activeSlot];
-            if (!blockInfo) return;
-            const nx = x + face.x, ny = y + face.y, nz = z + face.z;
-            const pp    = controls.getObject().position;
-            const feetY = pp.y - 1.6, headY = pp.y + 0.2;
-            const isXO  = pp.x+0.4 > nx-0.5 && pp.x-0.4 < nx+0.5;
-            const isZO  = pp.z+0.4 > nz-0.5 && pp.z-0.4 < nz+0.5;
-            let isYO    = headY > ny-0.5 && feetY < ny+0.45;
-            if (isXO && isZO && feetY > ny+0.1) isYO = false;
-            if (!(isXO && isZO && isYO)) addBlock(nx, ny, nz, blockInfo.color);
-        }
-    });
-    document.addEventListener('contextmenu', (e) => e.preventDefault());
-
-    // Renderer — no antialias, capped pixel ratio
-    renderer = new THREE.WebGLRenderer({ antialias: false, powerPreference: 'high-performance' });
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
-    renderer.setSize(window.innerWidth, window.innerHeight);
-    document.body.appendChild(renderer.domElement);
-    window.addEventListener('resize', () => {
-        camera.aspect = window.innerWidth / window.innerHeight;
-        camera.updateProjectionMatrix();
-        renderer.setSize(window.innerWidth, window.innerHeight);
-    });
-
-    // Initial chunk load (5x5 around origin)
-    for (let dcx = -2; dcx <= 2; dcx++) {
-        for (let dcz = -2; dcz <= 2; dcz++) {
-            loadChunk(dcx, dcz);
-        }
-    }
-
-    // Find a spawn position guaranteed to not have a tree trunk
-    let spawnX = 8, spawnZ = 8;
-    if (isTreeSpot(spawnX, spawnZ)) {
-        outer: for (let tz = 0; tz < CHUNK_SIZE; tz++) {
-            for (let tx = 0; tx < CHUNK_SIZE; tx++) {
-                if (!isTreeSpot(tx, tz)) { spawnX = tx; spawnZ = tz; break outer; }
-            }
-        }
-    }
-    const spawnH = getTerrainHeight(spawnX, spawnZ);
-    controls.getObject().position.set(spawnX, spawnH + 3, spawnZ);
-    prevTime = performance.now();
+        drops.length = 0;
+        applySave(game, data);
+        showLoading(false);
+        lockPointer();
+    }, 60);
 }
 
-// ===== ANIMATE =====
+function newWorld() {
+    if (!confirm('새 월드를 생성합니다. 저장하지 않은 내용은 사라집니다.')) return;
+    showLoading(true);
+    setTimeout(() => {
+        currentSaveId = null;
+        world.clear();
+        mobs.clear();
+        drops.length = 0;
+        world.seed = (Math.random() * 2147483647) | 0;
+        world.gen.seed = world.seed;
+        world.gen._hCache?.clear?.();
+        inventory.slots.fill(null);
+        sky.setTime(1000);
+        player.health = 20; player.food = 20; player.dead = false;
+        spawnPlayer();
+        showLoading(false);
+        lockPointer();
+    }, 60);
+}
+
+const SPAWN_OK = new Set([B.GRASS_BLOCK, B.SNOWY_GRASS, B.SAND, B.STONE, B.SNOW_BLOCK, B.DIRT, B.GRAVEL]);
+
+function spawnPlayer() {
+    // 바다·나무 위가 아닌 평지를 찾는다
+    let x = 8, z = 8;
+    for (let i = 0; i < 400; i++) {
+        if (world.gen.heightAt(x, z) > SEA_LEVEL + 1) break;
+        x += 16; if (i % 8 === 7) { z += 16; x = 8; }
+    }
+    world.forceLoad(x, z, 2);
+    let y = world.surfaceY(x, z);
+    // 나무 위에 스폰되면 주변에서 맨땅을 찾는다
+    if (!SPAWN_OK.has(world.getBlock(x, y - 1, z))) {
+        outer: for (let r = 1; r <= 8; r++)
+            for (let dx = -r; dx <= r; dx++)
+                for (let dz = -r; dz <= r; dz++) {
+                    const ny = world.surfaceY(x + dx, z + dz);
+                    if (SPAWN_OK.has(world.getBlock(x + dx, ny - 1, z + dz))) {
+                        x += dx; z += dz; y = ny; break outer;
+                    }
+                }
+    }
+    player.pos = { x: x + 0.5, y: y + 0.1, z: z + 0.5 };
+    player.spawn = { ...player.pos };
+    player.vel = { x: 0, y: 0, z: 0 };
+    player.yaw = 0; player.pitch = 0;
+}
+
+// ---------------- 죽음 ----------------
+const deathScreen = document.getElementById('death-screen');
+document.getElementById('respawn-btn').onclick = () => {
+    player.respawn();
+    deathScreen.style.display = 'none';
+    lockPointer();
+};
+player.onHurt = () => sfx.hurt();
+player.onStep = (id) => sfx.step(blocks[id].stepSound);
+
+// ---------------- 루프 ----------------
+let prev = performance.now();
+let fps = 0, fpsAcc = 0, fpsCount = 0;
+let bob = 0;
+
 function animate() {
     requestAnimationFrame(animate);
-    const time  = performance.now();
-    const delta = Math.min((time - prevTime) / 1000, 0.05);
-    prevTime = time;
+    const now = performance.now();
+    let dt = (now - prev) / 1000;
+    prev = now;
+    dt = Math.min(dt, 0.1);
 
-    const player = controls.getObject();
-    updateChunks(player.position.x, player.position.z);
+    fpsAcc += dt; fpsCount++;
+    if (fpsAcc > 0.5) { fps = Math.round(fpsCount / fpsAcc); fpsAcc = 0; fpsCount = 0; }
 
-    // Update block highlight using DDA raycast
-    currentTarget = controls.isLocked ? voxelRaycast(7) : null;
-    if (currentTarget) {
-        highlightMesh.position.set(currentTarget.x, currentTarget.y, currentTarget.z);
-        highlightMesh.visible = true;
+    const active = !paused && !player.dead;
+
+    // 물리 · 월드
+    if (active) {
+        player.update(dt, ui.open ? { forward: false, back: false, left: false, right: false, jump: false, sneak: false } : input);
+        mobs.update(dt, player, sky.isNight);
+    }
+    world.update(player.pos.x, player.pos.z, paused ? 12 : 6);
+    updateDrops(dt);
+    sky.update(paused ? dt * 0 : dt, camera.position, world.renderDistance);
+
+    // 수중에서는 시야가 짧고 푸르게 (마인크래프트와 동일)
+    if (player.headInWater) {
+        scene.fog.color.setRGB(0.06, 0.17, 0.42);
+        scene.background.setRGB(0.06, 0.17, 0.42);
+        scene.fog.near = 0.1;
+        scene.fog.far = 22;
+    }
+
+    // 카메라
+    camera.rotation.set(player.pitch, player.yaw, 0);
+    const speed = Math.hypot(player.vel.x, player.vel.z);
+    if (player.onGround && speed > 0.5) bob += dt * speed * 1.8;
+    const bobA = player.onGround ? Math.min(speed / 5, 1) * 0.045 : 0;
+    camera.position.set(
+        player.pos.x + Math.cos(bob) * bobA * 0.4,
+        player.eyeY + Math.abs(Math.sin(bob)) * bobA,
+        player.pos.z
+    );
+
+    if (active && !ui.open) {
+        updateTarget();
+        updateBreaking(dt);
+        updateEating(dt);
     } else {
-        highlightMesh.visible = false;
+        outline.visible = false;
+        setCrackStage(-1);
     }
 
-    if (controls.isLocked) {
-        velocity.x -= velocity.x * 10.0 * delta;
-        velocity.z -= velocity.z * 10.0 * delta;
+    // 화로 진행
+    for (const f of furnaces.values()) f.tick(dt);
+    ui.updateFurnace();
 
-        if (isFlying) {
-            velocity.y = 0;
-            if (moveUp)   velocity.y =  10;
-            if (moveDown) velocity.y = -10;
-        } else {
-            velocity.y -= 9.8 * 4.0 * delta;
-            velocity.y = Math.max(velocity.y, -20);
-        }
+    // 손
+    updateHandMesh();
+    swing = Math.max(0, swing - dt * 4);
+    const sw = Math.sin(swing * Math.PI);
+    handGroup.position.set(0.46 - sw * 0.1, -0.40 - sw * 0.14 + Math.abs(Math.sin(bob)) * bobA * 0.4, -0.72);
+    handGroup.rotation.set(sw * 0.9, 0, -sw * 0.3);
 
-        direction.z = Number(moveForward)  - Number(moveBackward);
-        direction.x = Number(moveRight)    - Number(moveLeft);
-        direction.normalize();
-
-        const speed = isFlying ? 120.0 : 60.0;
-        if (moveForward  || moveBackward) velocity.z -= direction.z * speed * delta;
-        if (moveLeft     || moveRight)    velocity.x -= direction.x * speed * delta;
-
-        const oldPos = player.position.clone();
-
-        if (velocity.z !== 0) {
-            controls.moveForward(-velocity.z * delta);
-            if (checkHorizontalCollision(player.position.x, player.position.y, player.position.z)) {
-                player.position.copy(oldPos); velocity.z = 0;
-            }
-        }
-
-        const posAfterZ = player.position.clone();
-        if (velocity.x !== 0) {
-            controls.moveRight(-velocity.x * delta);
-            if (checkHorizontalCollision(player.position.x, player.position.y, player.position.z)) {
-                player.position.copy(posAfterZ); velocity.x = 0;
-            }
-        }
-
-        // Vertical movement & landing
-        player.position.y += velocity.y * delta;
-        canJump = false;
-        const px = player.position.x, py = player.position.y, pz = player.position.z;
-        const minBx = Math.ceil(px - 0.75), maxBx = Math.floor(px + 0.75);
-        const minBz = Math.ceil(pz - 0.75), maxBz = Math.floor(pz + 0.75);
-
-        if (velocity.y <= 0) {
-            const feetY = py - 1.6;
-            const floorY = Math.floor(feetY);
-            outer: for (let fy = floorY + 1; fy >= floorY - 1; fy--) {
-                const blockTop = fy + 0.5;
-                if (feetY > blockTop + 0.3 || feetY < fy - 0.5) continue;
-                for (let bx = minBx; bx <= maxBx; bx++) {
-                    for (let bz = minBz; bz <= maxBz; bz++) {
-                        if (blockMap.has(bkey(bx, fy, bz))) {
-                            velocity.y = 0;
-                            player.position.y = blockTop + 1.6;
-                            canJump = true;
-                            if (!moveUp && !moveDown) isFlying = false;
-                            break outer;
-                        }
-                    }
-                }
-            }
-        } else {
-            // Math.round correctly finds the block containing the head (blocks centered at integers)
-            const ceilY = Math.round(py + 0.2);
-            outer: for (let bx = minBx; bx <= maxBx; bx++) {
-                for (let bz = minBz; bz <= maxBz; bz++) {
-                    if (blockMap.has(bkey(bx, ceilY, bz))) {
-                        velocity.y = 0;
-                        player.position.y = ceilY - 0.5 - 0.2;
-                        break outer;
-                    }
-                }
-            }
-        }
-
-        // Void respawn
-        if (py < -50) {
-            const sx = player.position.x, sz = player.position.z;
-            player.position.set(sx, getTerrainHeight(sx, sz) + 3, sz);
-            velocity.set(0, 0, 0);
-            isFlying = false;
-        }
+    // 죽음
+    if (player.dead && deathScreen.style.display !== 'flex') {
+        deathScreen.style.display = 'flex';
+        if (document.pointerLockElement) document.exitPointerLock();
+        sfx.die();
     }
 
+    // HUD
+    ui.updateHud();
+    if (showDebug) {
+        const bx = Math.floor(player.pos.x), by = Math.floor(player.pos.y), bz = Math.floor(player.pos.z);
+        ui.setDebug(
+            `FPS ${fps}\n` +
+            `XYZ ${player.pos.x.toFixed(2)} / ${player.pos.y.toFixed(2)} / ${player.pos.z.toFixed(2)}\n` +
+            `블록 ${bx} ${by} ${bz}  청크 ${Math.floor(bx / 16)} ${Math.floor(bz / 16)}\n` +
+            `바이옴 ${world.biomeNameAt(bx, bz)}\n` +
+            `시간 ${Math.floor(sky.time)} (${sky.isNight ? '밤' : '낮'})\n` +
+            `청크 ${world.stats.chunks}  몹 ${mobs.mobs.length}  드롭 ${drops.length}\n` +
+            `메시 ${world.stats.meshMs.toFixed(1)}ms  생성 ${world.stats.genMs.toFixed(1)}ms\n` +
+            `모드 ${player.gamemode}${player.flying ? ' (비행)' : ''}\n` +
+            `보는 블록 ${target ? blocks[target.block].display : '-'}`
+        );
+    }
+
+    // 렌더
+    renderer.clear();
     renderer.render(scene, camera);
+    renderer.clearDepth();
+    renderer.render(handScene, handCamera);
 }
 
-init();
-animate();
+// ---------------- 시작 ----------------
+function boot() {
+    showLoading(true);
+    spawnPlayer();
+    // 시작 아이템
+    inventory.add('oak_planks', 16);
+    inventory.add('torch', 16);
+    inventory.add('wooden_pickaxe', 1);
+    inventory.add('bread', 5);
+    setTimeout(() => showLoading(false), 100);
+    animate();
+}
+boot();
+
+// 디버그/콘솔용
+window.game = game;
