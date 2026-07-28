@@ -12,6 +12,7 @@ import { Sky } from './src/env.js';
 import { MobManager } from './src/mobs.js';
 import { sfx, resumeAudio } from './src/audio.js';
 import { listSaves, saveGame, applySave, deleteSave, renameSave } from './src/save.js';
+import { Console } from './src/commands.js';
 
 // ---------------- 렌더러 / 씬 ----------------
 const renderer = new THREE.WebGLRenderer({ antialias: false, powerPreference: 'high-performance' });
@@ -46,6 +47,9 @@ const mobs = new MobManager(scene, world);
 const game = { world, player, inventory, sky, mobs, camera, scene };
 const ui = new UI(game);
 game.ui = ui;
+const chat = new Console(game);
+game.chat = chat;
+chat.onClose = () => { if (!ui.open && !paused) lockPointer(); };
 
 let currentSaveId = null;
 let paused = true;
@@ -85,25 +89,55 @@ function setCrackStage(s) {
     crackMesh.visible = true;
 }
 
-// ---------------- 아이템 드롭 ----------------
-const dropGeo = new THREE.PlaneGeometry(0.35, 0.35);
-const dropMats = new Map();
-function dropMaterial(texIndex) {
-    if (!dropMats.has(texIndex)) {
-        const m = new THREE.MeshBasicMaterial({ map: atlas.texture, transparent: true, alphaTest: 0.5, side: THREE.DoubleSide });
-        // 아틀라스 타일만 사용하도록 uv 를 옮긴 전용 지오메트리를 쓴다
-        dropMats.set(texIndex, m);
-    }
-    return dropMats.get(texIndex);
-}
-function dropGeometry(texIndex) {
-    const g = dropGeo.clone();
+// ---------------- 아이템 입체 렌더링 ----------------
+// 마인크래프트처럼 아이템 스프라이트를 두께가 있는 판으로 돌출시킨다.
+// 앞/뒤 면 + 실루엣 가장자리에만 옆면을 붙여 정점 수를 아낀다.
+const itemMaterial = new THREE.MeshBasicMaterial({ map: atlas.texture, alphaTest: 0.5, side: THREE.FrontSide });
+const itemGeoCache = new Map();
+
+function itemGeometry(texIndex, size = 1, depth = 0.0625) {
+    if (itemGeoCache.has(texIndex)) return itemGeoCache.get(texIndex);
+    const px = atlas.pixels(texIndex);
     const [u0, v0, u1, v1] = atlas.uv(texIndex);
-    const uv = g.attributes.uv;
-    for (let i = 0; i < uv.count; i++) {
-        uv.setXY(i, u0 + uv.getX(i) * (u1 - u0), v0 + uv.getY(i) * (v1 - v0));
+    const du = (u1 - u0) / 16, dv = (v1 - v0) / 16;
+    const S = size / 16, hz = depth / 2, half = size / 2;
+    const pos = [], uvs = [], idxs = [];
+    let n = 0;
+    const quad = (a, b, c, d, ua, ub, uc, ud) => {
+        pos.push(...a, ...b, ...c, ...d);
+        uvs.push(...ua, ...ub, ...uc, ...ud);
+        idxs.push(n, n + 1, n + 2, n, n + 2, n + 3);
+        n += 4;
+    };
+    const solid = (x, y) => x >= 0 && y >= 0 && x < 16 && y < 16 && px[(y * 16 + x) * 4 + 3] > 127;
+
+    // 앞 / 뒤
+    quad([-half, -half, hz], [half, -half, hz], [half, half, hz], [-half, half, hz],
+         [u0, v0], [u1, v0], [u1, v1], [u0, v1]);
+    quad([half, -half, -hz], [-half, -half, -hz], [-half, half, -hz], [half, half, -hz],
+         [u1, v0], [u0, v0], [u0, v1], [u1, v1]);
+
+    // 실루엣 옆면 (UV 는 해당 픽셀 중앙 → 그 픽셀 색이 그대로 나온다)
+    for (let y = 0; y < 16; y++) {
+        for (let x = 0; x < 16; x++) {
+            if (!solid(x, y)) continue;
+            const X0 = (x - 8) * S, X1 = X0 + S;
+            const Y1 = (8 - y) * S, Y0 = Y1 - S;
+            const uc = u0 + (x + 0.5) * du, vc = v0 + (15 - y + 0.5) * dv;
+            const U = [uc, vc];
+            if (!solid(x - 1, y)) quad([X0, Y0, -hz], [X0, Y0, hz], [X0, Y1, hz], [X0, Y1, -hz], U, U, U, U);
+            if (!solid(x + 1, y)) quad([X1, Y0, hz], [X1, Y0, -hz], [X1, Y1, -hz], [X1, Y1, hz], U, U, U, U);
+            if (!solid(x, y - 1)) quad([X0, Y1, hz], [X1, Y1, hz], [X1, Y1, -hz], [X0, Y1, -hz], U, U, U, U);
+            if (!solid(x, y + 1)) quad([X0, Y0, -hz], [X1, Y0, -hz], [X1, Y0, hz], [X0, Y0, hz], U, U, U, U);
+        }
     }
-    uv.needsUpdate = true;
+
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    g.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+    g.setIndex(idxs);
+    g.computeBoundingSphere();
+    itemGeoCache.set(texIndex, g);
     return g;
 }
 
@@ -111,7 +145,8 @@ const drops = [];
 function spawnDrop(id, count, x, y, z) {
     const it = itemOf(id);
     if (!it) return;
-    const mesh = new THREE.Mesh(dropGeometry(it.tex), dropMaterial(it.tex));
+    const mesh = new THREE.Mesh(itemGeometry(it.tex), itemMaterial);
+    mesh.scale.setScalar(0.34);
     mesh.position.set(x, y, z);
     scene.add(mesh);
     drops.push({
@@ -147,12 +182,12 @@ function updateDrops(dt) {
                 const left = inventory.add(d.id, d.count);
                 if (left < d.count) {
                     sfx.pop();
-                    if (left === 0) { scene.remove(d.mesh); d.mesh.geometry.dispose(); drops.splice(i, 1); continue; }
+                    if (left === 0) { scene.remove(d.mesh); drops.splice(i, 1); continue; }
                     d.count = left;
                 }
             }
         }
-        if (d.age > 300) { scene.remove(d.mesh); d.mesh.geometry.dispose(); drops.splice(i, 1); }
+        if (d.age > 300) { scene.remove(d.mesh); drops.splice(i, 1); }
     }
 }
 
@@ -188,7 +223,7 @@ function updateHandMesh() {
     const key = s ? s.id : 'none';
     if (key === handKey) return;
     handKey = key;
-    if (handMesh) { handGroup.remove(handMesh); handMesh.geometry.dispose(); handMesh = null; }
+    if (handMesh) { handGroup.remove(handMesh); if (handMesh.userData.own) handMesh.geometry.dispose(); handMesh = null; }
     if (!s) return;
     const it = itemOf(s.id);
     if (!it) return;
@@ -197,14 +232,14 @@ function updateHandMesh() {
             shadedBoxGeometry(0.30, blocks[it.block]),
             new THREE.MeshBasicMaterial({ map: atlas.texture, vertexColors: true, alphaTest: 0.5 })
         );
+        handMesh.userData.own = true;
         handMesh.rotation.set(0.15, -0.5, 0.1);
     } else {
-        handMesh = new THREE.Mesh(
-            dropGeometry(it.tex),
-            new THREE.MeshBasicMaterial({ map: atlas.texture, transparent: true, alphaTest: 0.5, side: THREE.DoubleSide })
-        );
-        handMesh.scale.setScalar(1.3);
-        handMesh.rotation.set(0, -0.35, -0.6);
+        // 마인크래프트처럼 살짝 눕혀서 든다
+        handMesh = new THREE.Mesh(itemGeometry(it.tex), itemMaterial);
+        handMesh.scale.setScalar(0.30);
+        handMesh.position.set(0.02, -0.04, 0);
+        handMesh.rotation.set(0.05, -0.55, -0.7);
     }
     handGroup.add(handMesh);
 }
@@ -217,8 +252,13 @@ let lastSpace = 0, lastW = 0;
 const canLock = () => !paused && !ui.open;
 
 document.addEventListener('keydown', (e) => {
+    if (chat.open) return;                           // 채팅 입력 중에는 조작 무시
     if (e.code === 'Escape') return;                 // pointerlock 이 처리
     if (e.repeat && e.code !== 'Space') return;
+
+    // 채팅 / 명령어
+    if (e.code === 'KeyT' && !paused && !ui.open) { e.preventDefault(); openChat(''); return; }
+    if (e.code === 'Slash' && !paused && !ui.open) { e.preventDefault(); openChat('/'); return; }
 
     switch (e.code) {
         case 'KeyW': case 'ArrowUp': {
@@ -258,6 +298,7 @@ document.addEventListener('keydown', (e) => {
 });
 
 document.addEventListener('keyup', (e) => {
+    if (chat.open) return;
     switch (e.code) {
         case 'KeyW': case 'ArrowUp': input.forward = false; player.sprinting = false; break;
         case 'KeyS': case 'ArrowDown': input.back = false; break;
@@ -280,6 +321,7 @@ document.addEventListener('mousemove', (e) => {
 // 캔버스가 아니라 document 에 붙여야 한다.
 document.addEventListener('mousedown', (e) => {
     if (document.pointerLockElement !== document.body) return;
+    if (player.gamemode === 'spectator') return;      // 관전자는 상호작용 불가
     if (e.button === 0) { mouseLeft = true; tryAttack(); }
     if (e.button === 2) { mouseRight = true; useHeld(); }
 });
@@ -311,17 +353,27 @@ function dropHeld() {
     inventory.consumeHeld(1);
 }
 
+const GAMEMODE_CYCLE = ['survival', 'creative', 'spectator'];
+const GAMEMODE_KO = { survival: '서바이벌', creative: '크리에이티브', spectator: '관전자' };
 function toggleGamemode() {
-    player.gamemode = player.gamemode === 'survival' ? 'creative' : 'survival';
+    const i = GAMEMODE_CYCLE.indexOf(player.gamemode);
+    player.gamemode = GAMEMODE_CYCLE[(i + 1) % GAMEMODE_CYCLE.length];
     if (player.gamemode === 'survival') player.flying = false;
-    ui.showItemName('게임 모드: ' + (player.gamemode === 'creative' ? '크리에이티브' : '서바이벌'));
+    if (player.gamemode === 'spectator') { player.flying = true; resetBreak(); }
+    ui.showItemName('게임 모드: ' + GAMEMODE_KO[player.gamemode]);
 }
 
 // ---------------- 포인터 락 / 메뉴 ----------------
 const blocker = document.getElementById('blocker');
 const pauseMenu = document.getElementById('pause-menu');
 
-function lockPointer() { document.body.requestPointerLock(); }
+function lockPointer() {
+    // 짧은 시간에 여러 번 요청하면 브라우저가 거부한다 (동기 예외 + Promise 거부 모두 처리)
+    try {
+        const r = document.body.requestPointerLock();
+        if (r && typeof r.catch === 'function') r.catch(() => { });
+    } catch { /* 무시 */ }
+}
 
 document.addEventListener('pointerlockchange', () => {
     const locked = document.pointerLockElement === document.body;
@@ -329,7 +381,7 @@ document.addEventListener('pointerlockchange', () => {
         paused = false;
         blocker.style.display = 'none';
         resumeAudio();
-    } else if (!ui.open) {
+    } else if (!ui.open && !chat.open) {
         paused = true;
         blocker.style.display = 'flex';
         mouseLeft = mouseRight = false;
@@ -342,6 +394,14 @@ blocker.addEventListener('click', (e) => {
     if (document.getElementById('load-menu').style.display === 'flex') return;
     lockPointer();
 });
+
+function openChat(prefill) {
+    chat.show(prefill);
+    if (document.pointerLockElement) document.exitPointerLock();
+    mouseLeft = mouseRight = false;
+    resetBreak();
+    for (const k of Object.keys(input)) input[k] = false;
+}
 
 function openGui(kind, furnace = null) {
     ui.openScreen(kind, furnace);
@@ -406,10 +466,11 @@ function updateBreaking(dt) {
 
     const def = blocks[target.block];
     const held = inventory.heldItem();
+    // 크리에이티브는 기반암을 포함해 무엇이든 즉시 파괴
+    if (player.gamemode === 'creative') { destroyBlock(target.x, target.y, target.z); return; }
+
     const t = breakTime(def, held);
     if (t === Infinity) { setCrackStage(-1); return; }
-
-    if (player.gamemode === 'creative') { destroyBlock(target.x, target.y, target.z); return; }
 
     breakProgress += dt;
     if (breakProgress >= t) { destroyBlock(target.x, target.y, target.z); return; }
@@ -424,7 +485,7 @@ function destroyBlock(x, y, z) {
     const id = world.getBlock(x, y, z);
     if (id === AIR) return;
     const def = blocks[id];
-    if (def.hardness < 0) return;
+    if (def.hardness < 0 && player.gamemode !== 'creative') return;
 
     world.setBlock(x, y, z, AIR);
     sfx.breakBlock(def.stepSound);
@@ -659,11 +720,13 @@ function animate() {
     if (fpsAcc > 0.5) { fps = Math.round(fpsCount / fpsAcc); fpsAcc = 0; fpsCount = 0; }
 
     const active = !paused && !player.dead;
+    const spectator = player.gamemode === 'spectator';
 
     // 물리 · 월드
     if (active) {
-        player.update(dt, ui.open ? { forward: false, back: false, left: false, right: false, jump: false, sneak: false } : input);
-        mobs.update(dt, player, sky.isNight);
+        const blocked = ui.open || chat.open;
+        player.update(dt, blocked ? { forward: false, back: false, left: false, right: false, jump: false, sneak: false } : input);
+        mobs.update(dt, player, sky.isNight, sharedUniforms.skyBrightness.value);
     }
     world.update(player.pos.x, player.pos.z, paused ? 12 : 6);
     updateDrops(dt);
@@ -688,11 +751,12 @@ function animate() {
         player.pos.z
     );
 
-    if (active && !ui.open) {
+    if (active && !ui.open && !chat.open && !spectator) {
         updateTarget();
         updateBreaking(dt);
         updateEating(dt);
     } else {
+        target = null;
         outline.visible = false;
         setCrackStage(-1);
     }
@@ -701,7 +765,8 @@ function animate() {
     for (const f of furnaces.values()) f.tick(dt);
     ui.updateFurnace();
 
-    // 손
+    // 손 (관전자는 표시하지 않음)
+    handGroup.visible = !spectator;
     updateHandMesh();
     swing = Math.max(0, swing - dt * 4);
     const sw = Math.sin(swing * Math.PI);
@@ -717,6 +782,7 @@ function animate() {
 
     // HUD
     ui.updateHud();
+    document.body.classList.toggle('spectator', spectator);
     if (showDebug) {
         const bx = Math.floor(player.pos.x), by = Math.floor(player.pos.y), bz = Math.floor(player.pos.z);
         ui.setDebug(
@@ -727,7 +793,8 @@ function animate() {
             `시간 ${Math.floor(sky.time)} (${sky.isNight ? '밤' : '낮'})\n` +
             `청크 ${world.stats.chunks}  몹 ${mobs.mobs.length}  드롭 ${drops.length}\n` +
             `메시 ${world.stats.meshMs.toFixed(1)}ms  생성 ${world.stats.genMs.toFixed(1)}ms\n` +
-            `모드 ${player.gamemode}${player.flying ? ' (비행)' : ''}\n` +
+            `모드 ${GAMEMODE_KO[player.gamemode] ?? player.gamemode}${player.flying ? ' (비행)' : ''}\n` +
+            `밝기 하늘 ${world.getSkyLight(bx, by, bz)} / 블록 ${world.getBlockLight(bx, by, bz)}\n` +
             `보는 블록 ${target ? blocks[target.block].display : '-'}`
         );
     }

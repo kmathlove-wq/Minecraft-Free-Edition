@@ -209,3 +209,35 @@ canvas { display: block; }
     font: 12px/1.5 Consolas, monospace; text-shadow: 1px 1px 0 #000;
     pointer-events: none; white-space: pre;
 }
+
+/* ---------- 채팅 / 명령어 ---------- */
+#chat {
+    position: fixed; left: 10px; bottom: 96px; z-index: 30;
+    width: min(620px, 60vw); pointer-events: none;
+}
+#chat-log {
+    display: flex; flex-direction: column; justify-content: flex-end;
+    max-height: 42vh; overflow: hidden;
+    font: 13px/1.6 'Malgun Gothic', Consolas, monospace;
+}
+.chat-line {
+    background: rgba(0,0,0,.5); color: #fff; padding: 1px 6px;
+    text-shadow: 1px 1px 0 #000; transition: opacity .8s;
+    word-break: break-all;
+}
+.chat-line.err { color: #ff8a8a; }
+.chat-line.faded { opacity: 0; }
+#chat.open .chat-line { opacity: 1 !important; }
+#chat.open #chat-log { overflow-y: auto; pointer-events: auto; }
+
+#chat-input-wrap { display: none; margin-top: 3px; }
+#chat.open #chat-input-wrap { display: block; pointer-events: auto; }
+#chat-input {
+    width: 100%; padding: 6px 8px;
+    background: rgba(0,0,0,.65); color: #fff; border: 1px solid #888;
+    font: 14px/1.4 'Malgun Gothic', Consolas, monospace; outline: none;
+}
+
+/* 관전자 모드에서는 핫바/체력을 숨긴다 */
+body.spectator #hotbar, body.spectator #bars, body.spectator #air { display: none !important; }
+body.spectator #crosshair { opacity: .35; }

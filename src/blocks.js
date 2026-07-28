@@ -209,27 +209,27 @@ for (const b of blocks) {
 item('stick', { display: '막대기', tex: 'item_stick', fuel: 5 });
 item('coal', { display: '석탄', tex: 'item_coal', fuel: 80 });
 item('charcoal', { display: '목탄', tex: 'item_coal', fuel: 80 });
-item('raw_iron', { display: '철 원석', tex: 'item_iron' });
+item('raw_iron', { display: '철 원석', tex: 'item_raw_iron' });
 item('iron_ingot', { display: '철괴', tex: 'item_iron' });
-item('raw_copper', { display: '구리 원석', tex: 'item_gold' });
-item('copper_ingot', { display: '구리 주괴', tex: 'item_gold' });
-item('raw_gold', { display: '금 원석', tex: 'item_gold' });
+item('raw_copper', { display: '구리 원석', tex: 'item_raw_copper' });
+item('copper_ingot', { display: '구리 주괴', tex: 'item_copper' });
+item('raw_gold', { display: '금 원석', tex: 'item_raw_gold' });
 item('gold_ingot', { display: '금괴', tex: 'item_gold' });
 item('diamond', { display: '다이아몬드', tex: 'item_diamond' });
 item('emerald', { display: '에메랄드', tex: 'item_emerald' });
 item('lapis_lazuli', { display: '청금석', tex: 'item_lapis' });
 item('redstone', { display: '레드스톤 가루', tex: 'item_redstone' });
-item('glowstone_dust', { display: '발광석 가루', tex: 'item_gold' });
-item('clay_ball', { display: '점토 덩이', tex: 'item_leather' });
-item('brick', { display: '벽돌', tex: 'item_beef' });
-item('paper', { display: '종이', tex: 'item_bread' });
-item('book', { display: '책', tex: 'item_leather' });
+item('glowstone_dust', { display: '발광석 가루', tex: 'item_glowdust' });
+item('clay_ball', { display: '점토 덩이', tex: 'item_clay_ball' });
+item('brick', { display: '벽돌', tex: 'item_brick' });
+item('paper', { display: '종이', tex: 'item_paper' });
+item('book', { display: '책', tex: 'item_book' });
 item('leather', { display: '가죽', tex: 'item_leather' });
 item('string', { display: '실', tex: 'item_string' });
 item('bone', { display: '뼈', tex: 'item_bone' });
 item('feather', { display: '깃털', tex: 'item_feather' });
-item('gunpowder', { display: '화약', tex: 'item_redstone' });
-item('rotten_flesh', { display: '썩은 살점', tex: 'item_beef', food: { hunger: 4, saturation: 0.8 } });
+item('gunpowder', { display: '화약', tex: 'item_gunpowder' });
+item('rotten_flesh', { display: '썩은 살점', tex: 'item_rotten', food: { hunger: 4, saturation: 0.8 } });
 
 // 음식
 item('apple', { display: '사과', tex: 'item_apple', food: { hunger: 4, saturation: 2.4 } });

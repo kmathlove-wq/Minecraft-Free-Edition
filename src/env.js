@@ -123,7 +123,7 @@ export class Sky {
         this.sun.renderOrder = -2; this.moon.renderOrder = -2; this.stars.renderOrder = -2;
     }
 
-    get isNight() { return this.time > 13000 && this.time < 23000; }
+    get isNight() { return this.time >= 13000 && this.time < 23000; }
     get dayFraction() { return this.time / DAY_TICKS; }
 
     setTime(t) { this.time = ((t % DAY_TICKS) + DAY_TICKS) % DAY_TICKS; }

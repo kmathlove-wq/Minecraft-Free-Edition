@@ -185,7 +185,9 @@ export class Mob {
         }
 
         // 적대 몹은 낮에 불타서 사라짐(간략화: 사라짐)
-        if (t.hostile && !isNight && this.type !== 'creeper' && world.getBlock(Math.floor(this.pos.x), Math.floor(this.pos.y + t.h + 1), Math.floor(this.pos.z)) === AIR) {
+        // 낮에 하늘이 뚫린 곳에 있으면 불타 사라진다 (동굴 안에서는 안전)
+        if (t.hostile && !isNight && this.type !== 'creeper'
+            && world.getSkyLight(Math.floor(this.pos.x), Math.ceil(this.pos.y + t.h), Math.floor(this.pos.z)) >= 14) {
             this.hp -= dt * 3;
             if (this.hp <= 0) this.dead = true;
         }
@@ -216,7 +218,7 @@ export class MobManager {
         return m;
     }
 
-    update(dt, player, isNight) {
+    update(dt, player, isNight, skyFactor = 1) {
         if (!this.enabled) return;
         for (let i = this.mobs.length - 1; i >= 0; i--) {
             const m = this.mobs[i];
@@ -232,25 +234,66 @@ export class MobManager {
 
         this.spawnTimer -= dt;
         if (this.spawnTimer <= 0) {
-            this.spawnTimer = 4;
-            this._trySpawn(player, isNight);
+            this.spawnTimer = 3;
+            this._trySpawn(player, isNight, skyFactor);
         }
     }
 
-    _trySpawn(player, isNight) {
+    /**
+     * 마인크래프트와 같은 규칙:
+     *  - 적대 몹은 밝기 0인 곳(밤의 지표, 동굴 속)에 생성
+     *  - 동물은 낮의 밝은 잔디 위에 생성
+     */
+    _trySpawn(player, isNight, skyFactor = 1) {
         if (this.mobs.length >= this.maxMobs) return;
-        const pool = isNight ? ['zombie', 'zombie', 'skeleton', 'creeper'] : ['pig', 'cow', 'sheep', 'chicken'];
-        for (let tries = 0; tries < 12; tries++) {
+        const w = this.world;
+        const HOSTILE = ['zombie', 'zombie', 'skeleton', 'creeper'];
+        const PASSIVE = ['pig', 'cow', 'sheep', 'chicken'];
+
+        for (let tries = 0; tries < 24; tries++) {
             const a = Math.random() * Math.PI * 2;
-            const r = 24 + Math.random() * 20;
+            const r = 16 + Math.random() * 28;
             const x = Math.floor(player.pos.x + Math.cos(a) * r);
             const z = Math.floor(player.pos.z + Math.sin(a) * r);
-            const y = this.world.surfaceY(x, z);
-            if (y <= 1 || y >= WORLD_HEIGHT - 3) continue;
-            if (this.world.getBlock(x, y, z) !== AIR || this.world.getBlock(x, y + 1, z) !== AIR) continue;
-            if (!IS_SOLID[this.world.getBlock(x, y - 1, z)]) continue;
-            const type = pool[(Math.random() * pool.length) | 0];
-            this.spawn(type, x + 0.5, y, z + 0.5);
+
+            // 절반은 플레이어 높이 근처(동굴), 절반은 지표
+            let y;
+            if (tries % 2 === 0) {
+                y = Math.floor(player.pos.y) + ((Math.random() * 32) | 0) - 16;
+                y = Math.max(2, Math.min(WORLD_HEIGHT - 3, y));
+                // 해당 기둥에서 발판이 있는 곳까지 내려간다
+                let found = -1;
+                for (let k = 0; k < 20; k++) {
+                    const yy = y - k;
+                    if (yy < 2) break;
+                    if (w.getBlock(x, yy, z) === AIR && w.getBlock(x, yy + 1, z) === AIR
+                        && IS_SOLID[w.getBlock(x, yy - 1, z)]) { found = yy; break; }
+                }
+                if (found < 0) continue;
+                y = found;
+            } else {
+                y = w.surfaceY(x, z);
+                if (y <= 1 || y >= WORLD_HEIGHT - 3) continue;
+                if (w.getBlock(x, y, z) !== AIR || w.getBlock(x, y + 1, z) !== AIR) continue;
+                if (!IS_SOLID[w.getBlock(x, y - 1, z)]) continue;
+            }
+
+            // 플레이어 바로 옆에는 생성하지 않는다
+            if (Math.hypot(x + 0.5 - player.pos.x, y - player.pos.y, z + 0.5 - player.pos.z) < 12) continue;
+
+            const blockLight = w.getBlockLight(x, y, z);
+            const skyLight = w.getSkyLight(x, y, z);
+            const effective = Math.max(Math.round(skyLight * skyFactor), blockLight);
+
+            let pool = null;
+            if (blockLight === 0 && effective <= 3) pool = HOSTILE;          // 어두운 곳 → 적대 몹
+            else if (!isNight && effective >= 9 && skyLight >= 9) {
+                const ground = w.getBlock(x, y - 1, z);
+                if (ground === 3 /* grass_block */ || ground === 4 /* snowy grass */) pool = PASSIVE;
+            }
+            if (!pool) continue;
+
+            this.spawn(pool[(Math.random() * pool.length) | 0], x + 0.5, y, z + 0.5);
             return;
         }
     }

@@ -129,6 +129,34 @@ export class Player {
         if (this.dead) return;
         const w = this.world;
 
+        // 관전자: 충돌·중력·허기 없이 자유 비행, 블록 통과
+        if (this.gamemode === 'spectator') {
+            this.flying = true; this.sneaking = false; this.onGround = false;
+            this.inWater = this.headInWater = false;
+            this.health = 20; this.food = 20; this.air = 300;
+            const spd = input.sprint ? SPEED_FLY_FAST : SPEED_FLY;
+            let ix = (input.right ? 1 : 0) - (input.left ? 1 : 0);
+            let iz = (input.forward ? 1 : 0) - (input.back ? 1 : 0);
+            const len = Math.hypot(ix, iz);
+            if (len > 0) { ix /= len; iz /= len; }
+            const sn = Math.sin(this.yaw), cs = Math.cos(this.yaw);
+            // 시선 방향(상하 포함)으로 이동
+            const pitchCos = Math.cos(this.pitch);
+            const fx = -sn * pitchCos, fy = Math.sin(this.pitch), fz = -cs * pitchCos;
+            const rx = cs, rz = -sn;
+            const tx = (ix * rx + iz * fx) * spd;
+            const ty = iz * fy * spd + ((input.jump ? 1 : 0) - (input.sneak ? 1 : 0)) * spd;
+            const tz = (ix * rz + iz * fz) * spd;
+            const t = 1 - Math.exp(-10 * dt);
+            this.vel.x += (tx - this.vel.x) * t;
+            this.vel.y += (ty - this.vel.y) * t;
+            this.vel.z += (tz - this.vel.z) * t;
+            this.pos.x += this.vel.x * dt;
+            this.pos.y = Math.max(-40, Math.min(WORLD_HEIGHT + 40, this.pos.y + this.vel.y * dt));
+            this.pos.z += this.vel.z * dt;
+            return;
+        }
+
         // 물 판정
         const feet = w.getBlock(Math.floor(this.pos.x), Math.floor(this.pos.y + 0.1), Math.floor(this.pos.z));
         const head = w.getBlock(Math.floor(this.pos.x), Math.floor(this.eyeY), Math.floor(this.pos.z));
@@ -136,8 +164,7 @@ export class Player {
         this.headInWater = RENDER_KIND[head] === 3;
 
         this.sneaking = !!input.sneak && !this.flying;
-        const creative = this.gamemode === 'creative';
-        if (!creative) this.flying = false;
+        if (this.gamemode !== 'creative') this.flying = false;
 
         // 목표 수평 속도
         let target = SPEED_WALK;
@@ -209,7 +236,7 @@ export class Player {
         // 착지 처리 (낙하 피해)
         if (this.onGround && !wasGround && this.fallStart !== null) {
             const fell = this.fallStart - this.pos.y;
-            if (fell > 3 && this.gamemode === 'survival' && !this.inWater) {
+            if (fell > 3 && !this.inWater) {
                 this.damage(Math.floor(fell - 3));
             }
             this.fallStart = null;
@@ -227,7 +254,7 @@ export class Player {
         }
 
         this._survivalTick(dt);
-        if (this.pos.y < -20) this.damage(this.gamemode === 'creative' ? 0 : 4);
+        if (this.pos.y < -20) this.damage(4);
     }
 
     // 20 tps 생존 로직
@@ -266,7 +293,7 @@ export class Player {
     }
 
     damage(n) {
-        if (n <= 0 || this.gamemode === 'creative' || this.dead) return;
+        if (n <= 0 || this.gamemode !== 'survival' || this.dead) return;
         if (this.hurtTimer > 0) return;
         this.health = Math.max(0, this.health - n);
         this.hurtTimer = 10;

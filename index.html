@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>마인크래프트 프리에디션</title>
     <link rel="icon" type="image/png" href="사진/favicon.png">
-    <link rel="stylesheet" href="style.css?v=20260728111421">
+    <link rel="stylesheet" href="style.css?v=20260728115303">
 </head>
 <body>
     <!-- 시작 / 일시정지 화면 -->
@@ -20,6 +20,7 @@
                 <span><b>우클릭</b> 설치 · 사용</span><span><b>E</b> 인벤토리</span>
                 <span><b>1~9 / 휠</b> 슬롯 선택</span><span><b>Q</b> 아이템 버리기</span>
                 <span><b>F</b> 게임모드 전환</span><span><b>F3</b> 디버그 화면</span>
+                <span><b>T</b> 채팅</span><span><b>/</b> 명령어 (/help)</span>
                 <span><b>SPACE 두번</b> 비행 (크리에이티브)</span><span><b>ESC</b> 일시정지</span>
             </div>
             <div id="menu-buttons">
@@ -61,6 +62,12 @@
     </div>
     <div id="cursor-item"><div class="icon"></div><span class="count"></span><div class="durbar"><div class="durfill"></div></div></div>
 
+    <!-- 채팅 / 명령어 -->
+    <div id="chat">
+        <div id="chat-log"></div>
+        <div id="chat-input-wrap"><input id="chat-input" type="text" maxlength="256" autocomplete="off" spellcheck="false"></div>
+    </div>
+
     <!-- HUD -->
     <div id="water-overlay"></div>
     <div id="damage-overlay"></div>
@@ -84,6 +91,6 @@
             }
         }
     </script>
-    <script type="module" src="main.js?v=20260728111421"></script>
+    <script type="module" src="main.js?v=20260728115303"></script>
 </body>
 </html>

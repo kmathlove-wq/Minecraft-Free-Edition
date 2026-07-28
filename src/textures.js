@@ -388,23 +388,34 @@ const TEX = {
     break0: crack(0), break1: crack(1), break2: crack(2), break3: crack(3), break4: crack(4),
     break5: crack(5), break6: crack(6), break7: crack(7), break8: crack(8), break9: crack(9),
     // 아이템 아이콘
-    item_stick:       (p, r) => { clear(p); for (let i = 0; i < 9; i++) { p.set(11 - i, 4 + i, 0x8a6a3d); p.set(10 - i, 4 + i, 0x6b4f2a); } },
+    item_stick:       (p, r) => { clear(p); for (let i = 0; i < 10; i++) { p.set(11 - i, 4 + i, 0xa07c4a); p.set(10 - i, 4 + i, 0x6b4f2a); } },
     item_coal:        (p, r) => { clear(p); blob(p, r, 0x1c1c1c, 5); },
-    item_iron:        (p, r) => { clear(p); blob(p, r, 0xd8cfc4, 5); },
-    item_gold:        (p, r) => { clear(p); blob(p, r, 0xfbe14b, 5); },
+    item_raw_iron:    (p, r) => { clear(p); blob(p, r, 0xc9a48b, 5); },
+    item_raw_copper:  (p, r) => { clear(p); blob(p, r, 0xc07a4a, 5); },
+    item_raw_gold:    (p, r) => { clear(p); blob(p, r, 0xe0c04a, 5); },
+    item_iron:        ingot(0xd8d8d8, 0xf2f2f2),
+    item_copper:      ingot(0xc87f4a, 0xe8a878),
+    item_gold:        ingot(0xf7d94b, 0xfff0a0),
     item_diamond:     (p, r) => { clear(p); gem(p, 0x4fe5df); },
     item_emerald:     (p, r) => { clear(p); gem(p, 0x2ad45f); },
-    item_lapis:       (p, r) => { clear(p); blob(p, r, 0x2f57b8, 5); },
-    item_redstone:    (p, r) => { clear(p); blob(p, r, 0xd60000, 4); },
+    item_lapis:       (p, r) => { clear(p); blob(p, r, 0x2f57b8, 4); },
+    item_redstone:    dust(0xd60000),
+    item_gunpowder:   dust(0x9a9a9a),
+    item_glowdust:    dust(0xf2e08a),
+    item_clay_ball:   (p, r) => { clear(p); blob(p, r, 0xa4a8b8, 4); },
+    item_brick:       (p, r) => { clear(p); for (let y = 6; y <= 10; y++) for (let x = 3; x <= 12; x++) p.set(x, y, 0x9a5a4b, 255, ((r() * 2 - 1) * 12) | 0); for (let x = 3; x <= 12; x++) p.set(x, 8, 0xb8b0a8, 255); },
+    item_paper:       (p, r) => { clear(p); for (let y = 3; y <= 12; y++) for (let x = 3; x <= 12; x++) p.set(x, y, 0xf2f2ea, 255, ((r() * 2 - 1) * 6) | 0); for (let y = 5; y <= 10; y += 2) for (let x = 5; x <= 10; x++) p.set(x, y, 0xc8c8c0); },
+    item_book:        (p, r) => { clear(p); for (let y = 2; y <= 13; y++) for (let x = 4; x <= 12; x++) p.set(x, y, 0x8a4a2a, 255, ((r() * 2 - 1) * 10) | 0); for (let y = 3; y <= 12; y++) { p.set(3, y, 0xf0ecd8); p.set(4, y, 0xf0ecd8); } },
     item_apple:       (p, r) => { clear(p); circle(p, 8, 9, 5, 0xd03030); circle(p, 6, 7, 2, 0xe86060); for (let y = 2; y < 6; y++) p.set(9, y, 0x5a3a1a); p.set(11, 3, 0x4f8f36); p.set(12, 3, 0x4f8f36); },
-    item_bread:       (p, r) => { clear(p); for (let y = 5; y < 12; y++) for (let x = 2; x < 14; x++) { if ((x === 2 || x === 13) && (y === 5 || y === 11)) continue; p.set(x, y, 0xc08a3e, 255, ((r() * 2 - 1) * 12) | 0); } },
-    item_beef:        (p, r) => { clear(p); circle(p, 8, 8, 6, 0xc44a3a); circle(p, 7, 7, 3, 0xe07a6a); },
-    item_cooked_beef: (p, r) => { clear(p); circle(p, 8, 8, 6, 0x8a4a2a); circle(p, 7, 7, 3, 0xb06a3a); },
-    item_porkchop:    (p, r) => { clear(p); circle(p, 8, 8, 6, 0xe08a7a); circle(p, 6, 6, 2, 0xf0b0a0); },
-    item_leather:     (p, r) => { clear(p); for (let y = 4; y < 13; y++) for (let x = 3; x < 14; x++) p.set(x, y, 0xa06a3a, 255, ((r() * 2 - 1) * 12) | 0); },
+    item_bread:       (p, r) => { clear(p); for (let y = 5; y < 12; y++) for (let x = 2; x < 14; x++) { if ((x === 2 || x === 13) && (y === 5 || y === 11)) continue; p.set(x, y, 0xc08a3e, 255, ((r() * 2 - 1) * 12) | 0); } for (const [x, y] of [[5, 6], [8, 7], [11, 6]]) { p.set(x, y, 0x8a5a20); p.set(x, y + 1, 0x8a5a20); } },
+    item_beef:        (p, r) => { clear(p); circle(p, 8, 8, 6, 0xc44a3a); circle(p, 7, 7, 3, 0xe07a6a); circle(p, 11, 11, 2, 0xf0e8d8); },
+    item_cooked_beef: (p, r) => { clear(p); circle(p, 8, 8, 6, 0x8a4a2a); circle(p, 7, 7, 3, 0xb06a3a); circle(p, 11, 11, 2, 0xe0d8c8); },
+    item_porkchop:    (p, r) => { clear(p); circle(p, 8, 8, 6, 0xe08a7a); circle(p, 6, 6, 2, 0xf0b0a0); circle(p, 11, 11, 2, 0xf5f0e0); },
+    item_leather:     (p, r) => { clear(p); for (let y = 4; y < 13; y++) for (let x = 3; x < 14; x++) p.set(x, y, 0xa06a3a, 255, ((r() * 2 - 1) * 12) | 0); for (let x = 3; x < 14; x++) { p.set(x, 4, 0xc08a5a); p.set(x, 12, 0x7a4e28); } },
     item_string:      (p, r) => { clear(p); for (let i = 0; i < 14; i++) p.set(3 + ((Math.sin(i * 0.8) * 3 + 4) | 0), 1 + i, 0xdcdcdc); },
-    item_bone:        (p, r) => { clear(p); for (let i = 0; i < 8; i++) p.set(4 + i, 11 - i, 0xe8e4d8); circle(p, 3, 12, 2, 0xe8e4d8); circle(p, 12, 3, 2, 0xe8e4d8); },
+    item_bone:        (p, r) => { clear(p); for (let i = 0; i < 8; i++) { p.set(4 + i, 11 - i, 0xe8e4d8); p.set(5 + i, 11 - i, 0xd8d4c4); } circle(p, 3, 12, 2, 0xe8e4d8); circle(p, 12, 3, 2, 0xe8e4d8); },
     item_feather:     (p, r) => { clear(p); for (let i = 0; i < 12; i++) { p.set(4 + ((i * 0.5) | 0), 13 - i, 0xf0f0f0); p.set(5 + ((i * 0.5) | 0), 13 - i, 0xd8d8d8); } },
+    item_rotten:      (p, r) => { clear(p); circle(p, 8, 8, 6, 0x6d5a3a); circle(p, 6, 7, 2, 0x8a7550); for (const [x, y] of [[10, 6], [5, 11], [11, 10]]) circle(p, x, y, 1, 0x4a3d28); },
     // 도구 아이콘
     tool_wood_pick:   toolIcon('pick', 0xa47c50),
     tool_stone_pick:  toolIcon('pick', 0x8a8a8a),
@@ -465,32 +476,127 @@ function crack(stage) {
         }
     };
 }
-/** 도구 아이콘 */
+/** 도구 아이콘: 16x16 픽셀 패턴 (H=머리, s=손잡이, d=손잡이 그림자) */
+const TOOL_ART = {
+    pick: [
+        '................',
+        '....HHH..HHH....',
+        '...H...HH...H...',
+        '...H..HddH..H...',
+        '...HHH.dd.HHH...',
+        '.......dd.......',
+        '......ds........',
+        '......ds........',
+        '.....ds.........',
+        '.....ds.........',
+        '....ds..........',
+        '....ds..........',
+        '...ds...........',
+        '...ds...........',
+        '...d............',
+        '................'
+    ],
+    axe: [
+        '................',
+        '.......HHH......',
+        '......HHHHH.....',
+        '.....HHHHHHH....',
+        '.....HHHHdHH....',
+        '.....HHHHdd.....',
+        '......HHds......',
+        '.......ds.......',
+        '......ds........',
+        '......ds........',
+        '.....ds.........',
+        '.....ds.........',
+        '....ds..........',
+        '....ds..........',
+        '...d............',
+        '................'
+    ],
+    shovel: [
+        '................',
+        '.........HHH....',
+        '........HHHHH...',
+        '........HHHHH...',
+        '........HHHHH...',
+        '.........HHH....',
+        '.........dd.....',
+        '........ds......',
+        '.......ds.......',
+        '......ds........',
+        '.....ds.........',
+        '.....ds.........',
+        '....ds..........',
+        '....ds..........',
+        '...d............',
+        '................'
+    ],
+    sword: [
+        '................',
+        '............HH..',
+        '...........HHH..',
+        '..........HHH...',
+        '.........HHH....',
+        '........HHH.....',
+        '.......HHH......',
+        '......HHH.......',
+        '.....HHH........',
+        '..d.HHH.........',
+        '..dsHH..........',
+        '.dsdsd..........',
+        '..ds.ds.........',
+        '.ds...d.........',
+        '................',
+        '................'
+    ]
+};
 function toolIcon(kind, headHex) {
-    return (p) => {
+    // TOOL_ART 는 TEX 테이블보다 아래에 선언되므로 그리는 시점에 조회한다
+    return (p, r) => {
+        const art = TOOL_ART[kind];
         clear(p);
-        const stick = 0x8a6a3d;
-        for (let i = 0; i < 9; i++) { p.set(11 - i, 5 + i, stick); p.set(10 - i, 5 + i, 0x6b4f2a); }
-        if (kind === 'pick') {
-            for (let x = 4; x <= 12; x++) p.set(x, 3, headHex);
-            for (const [x, y] of [[3, 4], [4, 4], [12, 4], [13, 4], [2, 5], [13, 5], [5, 4], [11, 4]]) p.set(x, y, headHex);
-            p.set(8, 4, headHex); p.set(8, 5, headHex);
-        } else if (kind === 'axe') {
-            for (let y = 2; y <= 7; y++) for (let x = 8; x <= 12; x++) { if ((y === 2 || y === 7) && x > 10) continue; p.set(x, y, headHex); }
-            p.set(7, 3, headHex); p.set(7, 4, headHex); p.set(7, 5, headHex);
-        } else if (kind === 'shovel') {
-            for (let y = 2; y <= 6; y++) for (let x = 9; x <= 12; x++) p.set(x, y, headHex);
-            p.set(10, 7, headHex); p.set(11, 7, headHex);
-        } else if (kind === 'sword') {
-            for (let i = 0; i < 10; i++) { p.set(12 - i, 3 + i, headHex); p.set(11 - i, 3 + i, headHex); }
-            for (const [x, y] of [[2, 12], [3, 13], [4, 12], [3, 11], [2, 13], [4, 14], [5, 13]]) p.set(x, y, 0x8a6a3d);
+        const stick = 0xa07c4a, dark = 0x6b4f2a;
+        for (let y = 0; y < TILE; y++) {
+            const row = art[y];
+            for (let x = 0; x < TILE; x++) {
+                const ch = row[x];
+                if (ch === 'H') p.set(x, y, headHex, 255, ((r() * 2 - 1) * 16) | 0);
+                else if (ch === 's') p.set(x, y, stick, 255, ((r() * 2 - 1) * 10) | 0);
+                else if (ch === 'd') p.set(x, y, dark, 255, ((r() * 2 - 1) * 10) | 0);
+            }
         }
+    };
+}
+
+/** 주괴 (철·금·구리) */
+function ingot(hex, hi) {
+    return (p, r) => {
+        clear(p);
+        for (let y = 5; y <= 10; y++) {
+            const inset = y <= 6 ? 4 : y >= 10 ? 3 : 2;
+            for (let x = inset; x < TILE - inset; x++) p.set(x, y, hex, 255, ((r() * 2 - 1) * 10) | 0);
+        }
+        for (let x = 5; x <= 10; x++) p.set(x, 6, hi, 255);
+        for (let x = 4; x <= 11; x++) p.set(x, 10, hex, 255, -28);
+    };
+}
+/** 가루 (레드스톤·화약·발광석) */
+function dust(hex) {
+    return (p, r) => {
+        clear(p);
+        for (let i = 0; i < 46; i++) {
+            const x = 2 + ((r() * 12) | 0), y = 5 + ((r() * 9) | 0);
+            p.set(x, y, hex, 255, ((r() * 2 - 1) * 40) | 0);
+        }
+        for (let x = 3; x < 13; x++) p.set(x, 13, hex, 255, -30);
     };
 }
 
 // ---- 아틀라스 빌드 ----
 const names = Object.keys(TEX);
 const index = new Map();
+const pixelCache = new Map();
 let canvas = null, texture = null, dataURL = '';
 
 function build() {
@@ -525,6 +631,15 @@ export const atlas = {
     names,
     /** 아틀라스 인덱스 → 텍스처 이름 */
     nameOf(i) { return names[i]; },
+    /** 타일 하나의 픽셀 데이터 (RGBA, 16x16) — 아이템 입체 렌더링용 */
+    pixels(i) {
+        if (!pixelCache.has(i)) {
+            const ctx = canvas.getContext('2d', { willReadFrequently: true });
+            const c = i % COLS, r = (i / COLS) | 0;
+            pixelCache.set(i, ctx.getImageData(c * TILE, r * TILE, TILE, TILE).data);
+        }
+        return pixelCache.get(i);
+    },
     /** 텍스처 이름 → 아틀라스 인덱스 */
     id(name) {
         const i = index.get(name);

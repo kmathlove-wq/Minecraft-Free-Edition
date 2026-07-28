@@ -2,9 +2,10 @@
 import * as THREE from 'three';
 import { Chunk, buildChunkMesh } from './chunk.js';
 import { WorldGen, CHUNK_SIZE, WORLD_HEIGHT, SEA_LEVEL, idx, BIOME_INFO } from './worldgen.js';
-import { AIR, B, IS_SOLID, blocks, RENDER_KIND } from './blocks.js';
+import { AIR, B, IS_SOLID, IS_OPAQUE, BLOCKS_SKY, LIGHT_EMIT, blocks, RENDER_KIND } from './blocks.js';
 
 const ckey = (cx, cz) => cx + ',' + cz;
+const DIRS = [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]];
 
 export class World {
     constructor(scene, seed = 1337) {
@@ -18,22 +19,255 @@ export class World {
         this.genQueue = [];
         this.meshQueue = [];
         this._lastCx = null; this._lastCz = null;
+        this._cCx = NaN; this._cCz = NaN; this._cChunk = null;
         this.stats = { chunks: 0, meshMs: 0, genMs: 0 };
     }
 
     // ---------- 청크 접근 ----------
     getChunk(cx, cz) { return this.chunks.get(ckey(cx, cz)); }
 
+    /** 조명 BFS 는 인접 좌표를 연달아 훑으므로 마지막 청크를 캐싱하면 크게 빨라진다 */
+    _chunkOf(cx, cz) {
+        if (cx === this._cCx && cz === this._cCz) return this._cChunk;
+        const c = this.chunks.get(ckey(cx, cz));
+        this._cCx = cx; this._cCz = cz; this._cChunk = c;
+        return c;
+    }
+    _invalidateCache() { this._cCx = NaN; this._cCz = NaN; this._cChunk = null; }
+
     getBlock(wx, wy, wz) {
         if (wy < 0 || wy >= WORLD_HEIGHT) return AIR;
-        const cx = Math.floor(wx / CHUNK_SIZE), cz = Math.floor(wz / CHUNK_SIZE);
-        const c = this.chunks.get(ckey(cx, cz));
+        const cx = wx >> 4, cz = wz >> 4;
+        const c = this._chunkOf(cx, cz);
         if (!c || !c.generated) return AIR;
-        return c.data[idx(wx - cx * CHUNK_SIZE, wy, wz - cz * CHUNK_SIZE)];
+        return c.data[idx(wx - (cx << 4), wy, wz - (cz << 4))];
     }
 
     isSolid(wx, wy, wz) { return IS_SOLID[this.getBlock(wx, wy, wz)] === 1; }
     isLiquid(wx, wy, wz) { return RENDER_KIND[this.getBlock(wx, wy, wz)] === 3; }
+
+    // ================== 조명 ==================
+    // 청크 단위로 계산하면 빛이 경계에서 잘리므로, 월드 전체를 대상으로 BFS 전파한다.
+    // chunk.light 는 상위 4비트=하늘빛, 하위 4비트=블록빛.
+
+    getSkyLight(wx, wy, wz) {
+        if (wy >= WORLD_HEIGHT) return 15;
+        if (wy < 0) return 0;
+        const cx = wx >> 4, cz = wz >> 4;
+        const c = this._chunkOf(cx, cz);
+        if (!c) return 15;
+        return c.light[idx(wx - (cx << 4), wy, wz - (cz << 4))] >> 4;
+    }
+    getBlockLight(wx, wy, wz) {
+        if (wy < 0 || wy >= WORLD_HEIGHT) return 0;
+        const cx = wx >> 4, cz = wz >> 4;
+        const c = this._chunkOf(cx, cz);
+        if (!c) return 0;
+        return c.light[idx(wx - (cx << 4), wy, wz - (cz << 4))] & 15;
+    }
+    /** 플레이어·몹 스폰 판정용 실효 밝기 (0~15) */
+    lightAt(wx, wy, wz, skyFactor = 1) {
+        return Math.max(Math.round(this.getSkyLight(wx, wy, wz) * skyFactor), this.getBlockLight(wx, wy, wz));
+    }
+
+    _setLight(wx, wy, wz, value, sky) {
+        if (wy < 0 || wy >= WORLD_HEIGHT) return false;
+        const cx = wx >> 4, cz = wz >> 4;
+        const c = this._chunkOf(cx, cz);
+        if (!c || !c.generated) return false;
+        const i = idx(wx - (cx << 4), wy, wz - (cz << 4));
+        const cur = c.light[i];
+        const next = sky ? ((value << 4) | (cur & 15)) : ((cur & 0xf0) | value);
+        if (cur === next) return true;
+        c.light[i] = next;
+        c.dirty = true;
+        // 경계 셀이면 이웃 청크 메시도 갱신해야 한다
+        const lx = wx - (cx << 4), lz = wz - (cz << 4);
+        if (lx === 0) this._touch(cx - 1, cz);
+        else if (lx === CHUNK_SIZE - 1) this._touch(cx + 1, cz);
+        if (lz === 0) this._touch(cx, cz - 1);
+        else if (lz === CHUNK_SIZE - 1) this._touch(cx, cz + 1);
+        return true;
+    }
+
+    /**
+     * 밝은 셀에서 바깥으로 빛을 퍼뜨린다.
+     * queue 는 [x,y,z, x,y,z, ...] 형태의 평탄한 숫자 배열
+     * (좌표마다 배열을 만들면 GC 부담이 커서 평탄화했다)
+     */
+    _lightAdd(queue, sky) {
+        for (let head = 0; head < queue.length; head += 3) {
+            const x = queue[head], y = queue[head + 1], z = queue[head + 2];
+            const l = sky ? this.getSkyLight(x, y, z) : this.getBlockLight(x, y, z);
+            if (l <= 1) continue;
+            for (let d = 0; d < 6; d++) {
+                const dir = DIRS[d];
+                const nx = x + dir[0], ny = y + dir[1], nz = z + dir[2];
+                if (ny < 0 || ny >= WORLD_HEIGHT) continue;
+                const nb = this.getBlock(nx, ny, nz);
+                if (sky ? BLOCKS_SKY[nb] : IS_OPAQUE[nb]) continue;
+                // 하늘빛은 수직으로 내려갈 때 감쇠하지 않는다 (마인크래프트와 동일)
+                const nl = (sky && dir[1] === -1 && l === 15) ? 15 : l - 1;
+                const cur = sky ? this.getSkyLight(nx, ny, nz) : this.getBlockLight(nx, ny, nz);
+                if (cur >= nl) continue;
+                if (!this._setLight(nx, ny, nz, nl, sky)) continue;
+                queue.push(nx, ny, nz);
+            }
+        }
+    }
+
+    /** 사라진 광원 주변의 빛을 지우고 남은 빛으로 다시 채운다. queue 는 [x,y,z,이전밝기, ...] */
+    _lightRemove(queue, sky) {
+        const relight = [];
+        for (let head = 0; head < queue.length; head += 4) {
+            const x = queue[head], y = queue[head + 1], z = queue[head + 2], lvl = queue[head + 3];
+            for (let d = 0; d < 6; d++) {
+                const dir = DIRS[d];
+                const nx = x + dir[0], ny = y + dir[1], nz = z + dir[2];
+                if (ny < 0 || ny >= WORLD_HEIGHT) continue;
+                const cur = sky ? this.getSkyLight(nx, ny, nz) : this.getBlockLight(nx, ny, nz);
+                if (cur === 0) continue;
+                const straightDown = sky && dir[1] === -1 && lvl === 15;
+                if (cur < lvl || (straightDown && cur === 15)) {
+                    if (this._setLight(nx, ny, nz, 0, sky)) queue.push(nx, ny, nz, cur);
+                } else {
+                    relight.push(nx, ny, nz);
+                }
+            }
+        }
+        if (relight.length) this._lightAdd(relight, sky);
+    }
+
+    /** 한 기둥의 하늘 노출 높이를 다시 계산한다 */
+    _recalcSkyColumn(wx, wz) {
+        const cx = Math.floor(wx / CHUNK_SIZE), cz = Math.floor(wz / CHUNK_SIZE);
+        const c = this.chunks.get(ckey(cx, cz));
+        if (!c || !c.generated) return;
+        const lx = wx - cx * CHUNK_SIZE, lz = wz - cz * CHUNK_SIZE;
+
+        let top = WORLD_HEIGHT - 1;
+        while (top >= 0 && !BLOCKS_SKY[c.data[idx(lx, top, lz)]]) top--;
+        top += 1;   // top 이상이 하늘에 직접 노출
+
+        const addQ = [], remQ = [];
+        for (let y = 0; y < WORLD_HEIGHT; y++) {
+            const i = idx(lx, y, lz);
+            const cur = c.light[i] >> 4;
+            if (y >= top) {
+                if (cur < 15) { this._setLight(wx, y, wz, 15, true); addQ.push(wx, y, wz); }
+            } else if (cur === 15) {
+                this._setLight(wx, y, wz, 0, true);
+                remQ.push(wx, y, wz, 15);
+            }
+        }
+        if (remQ.length) this._lightRemove(remQ, true);
+        if (addQ.length) this._lightAdd(addQ, true);
+    }
+
+    /** 새로 만들어진 청크의 조명 초기화 (이웃과 빛을 주고받는다) */
+    _initChunkLight(c) {
+        c.light.fill(0);
+        const ox = c.cx * CHUNK_SIZE, oz = c.cz * CHUNK_SIZE;
+        const skyQ = [], blkQ = [];
+
+        // 1) 각 기둥의 하늘 노출 구간을 15로 채운다
+        const colTop = new Int16Array(CHUNK_SIZE * CHUNK_SIZE);
+        for (let lz = 0; lz < CHUNK_SIZE; lz++) {
+            for (let lx = 0; lx < CHUNK_SIZE; lx++) {
+                let y = WORLD_HEIGHT - 1;
+                for (; y >= 0; y--) {
+                    const i = idx(lx, y, lz);
+                    if (BLOCKS_SKY[c.data[i]]) break;
+                    c.light[i] = 15 << 4;
+                }
+                colTop[lz * CHUNK_SIZE + lx] = y + 1;
+            }
+        }
+        // 옆으로 퍼져야 하는 구간(주변 기둥이 더 높은 곳)만 시드로 넣는다
+        for (let lz = 0; lz < CHUNK_SIZE; lz++) {
+            for (let lx = 0; lx < CHUNK_SIZE; lx++) {
+                const col = lz * CHUNK_SIZE + lx;
+                let maxNb = 0;
+                for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+                    const nx = lx + dx, nz = lz + dz;
+                    maxNb = Math.max(maxNb, (nx >= 0 && nx < CHUNK_SIZE && nz >= 0 && nz < CHUNK_SIZE)
+                        ? colTop[nz * CHUNK_SIZE + nx] : WORLD_HEIGHT);
+                }
+                for (let y = colTop[col]; y < maxNb; y++) skyQ.push(ox + lx, y, oz + lz);
+            }
+        }
+
+        // 2) 이 청크 안의 광원
+        for (let y = 0; y <= c.maxY + 1 && y < WORLD_HEIGHT; y++)
+            for (let lz = 0; lz < CHUNK_SIZE; lz++)
+                for (let lx = 0; lx < CHUNK_SIZE; lx++) {
+                    const i = idx(lx, y, lz);
+                    const e = LIGHT_EMIT[c.data[i]];
+                    if (e > 0) { c.light[i] |= e; blkQ.push(ox + lx, y, oz + lz); }
+                }
+
+        // 3) 이웃 청크의 경계 빛 중, 이쪽이 더 어두운 셀만 시드로 넣는다
+        for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+            const n = this.chunks.get(ckey(c.cx + dx, c.cz + dz));
+            if (!n || !n.generated) continue;
+            const yTop = Math.min(WORLD_HEIGHT - 1, Math.max(n.maxY, c.maxY) + 2);
+            for (let t = 0; t < CHUNK_SIZE; t++) {
+                const nlx = dx === 1 ? 0 : dx === -1 ? CHUNK_SIZE - 1 : t;
+                const nlz = dz === 1 ? 0 : dz === -1 ? CHUNK_SIZE - 1 : t;
+                const clx = dx === 1 ? CHUNK_SIZE - 1 : dx === -1 ? 0 : t;
+                const clz = dz === 1 ? CHUNK_SIZE - 1 : dz === -1 ? 0 : t;
+                const wx = n.cx * CHUNK_SIZE + nlx, wz = n.cz * CHUNK_SIZE + nlz;
+                for (let y = 0; y <= yTop; y++) {
+                    const L = n.light[idx(nlx, y, nlz)];
+                    const M = c.light[idx(clx, y, clz)];
+                    if ((L >> 4) > (M >> 4) + 1) skyQ.push(wx, y, wz);
+                    if ((L & 15) > (M & 15) + 1) blkQ.push(wx, y, wz);
+                }
+            }
+        }
+
+        this._lightAdd(skyQ, true);
+        this._lightAdd(blkQ, false);
+    }
+
+    /** 블록이 바뀐 뒤 조명을 갱신한다 */
+    _updateLight(wx, wy, wz, prev, id) {
+        // --- 블록빛 ---
+        const oldEmit = LIGHT_EMIT[prev], newEmit = LIGHT_EMIT[id];
+        const oldLevel = this.getBlockLight(wx, wy, wz);
+        if (oldLevel > 0) {
+            this._setLight(wx, wy, wz, 0, false);
+            this._lightRemove([wx, wy, wz, oldLevel], false);
+        }
+        if (newEmit > 0) {
+            this._setLight(wx, wy, wz, newEmit, false);
+            this._lightAdd([wx, wy, wz], false);
+        }
+        if (!IS_OPAQUE[id]) {
+            // 새로 뚫린 공간으로 주변 빛이 흘러들어오도록
+            const q = [];
+            for (const [dx, dy, dz] of DIRS) {
+                const nx = wx + dx, ny = wy + dy, nz = wz + dz;
+                if (this.getBlockLight(nx, ny, nz) > 1) q.push(nx, ny, nz);
+            }
+            if (q.length) this._lightAdd(q, false);
+        }
+
+        // --- 하늘빛 ---
+        if (BLOCKS_SKY[prev] !== BLOCKS_SKY[id]) this._recalcSkyColumn(wx, wz);
+        if (!BLOCKS_SKY[id]) {
+            const q = [];
+            for (const [dx, dy, dz] of DIRS) {
+                const nx = wx + dx, ny = wy + dy, nz = wz + dz;
+                if (this.getSkyLight(nx, ny, nz) > 1) q.push(nx, ny, nz);
+            }
+            if (q.length) this._lightAdd(q, true);
+        } else if (this.getSkyLight(wx, wy, wz) > 0) {
+            const lv = this.getSkyLight(wx, wy, wz);
+            this._setLight(wx, wy, wz, 0, true);
+            this._lightRemove([wx, wy, wz, lv], true);
+        }
+    }
 
     biomeAt(wx, wz) {
         const cx = Math.floor(wx / CHUNK_SIZE), cz = Math.floor(wz / CHUNK_SIZE);
@@ -66,19 +300,16 @@ export class World {
             m.set(lx + ',' + wy + ',' + lz, id);
         }
 
-        // 광원이 바뀌면 빛이 최대 15칸 퍼지므로 주변 3x3 청크를 모두 갱신,
-        // 그 외에는 경계에 닿은 이웃만 갱신해 리메시 비용을 줄인다.
+        // 경계에 닿았으면 이웃 청크도 다시 메시를 만들어야 한다.
+        // (조명 변화로 인한 추가 갱신은 _setLight 안에서 처리된다)
         this._touch(cx, cz);
-        if (blocks[id].light > 0 || blocks[prev].light > 0) {
-            for (let dx = -1; dx <= 1; dx++)
-                for (let dz = -1; dz <= 1; dz++) this._touch(cx + dx, cz + dz);
-        } else {
-            const ex = lx === 0 ? -1 : lx === CHUNK_SIZE - 1 ? 1 : 0;
-            const ez = lz === 0 ? -1 : lz === CHUNK_SIZE - 1 ? 1 : 0;
-            if (ex) this._touch(cx + ex, cz);
-            if (ez) this._touch(cx, cz + ez);
-            if (ex && ez) this._touch(cx + ex, cz + ez);
-        }
+        const ex = lx === 0 ? -1 : lx === CHUNK_SIZE - 1 ? 1 : 0;
+        const ez = lz === 0 ? -1 : lz === CHUNK_SIZE - 1 ? 1 : 0;
+        if (ex) this._touch(cx + ex, cz);
+        if (ez) this._touch(cx, cz + ez);
+        if (ex && ez) this._touch(cx + ex, cz + ez);
+
+        this._updateLight(wx, wy, wz, prev, id);
         return true;
     }
 
@@ -118,6 +349,7 @@ export class World {
             if (Math.abs(c.cx - cx) > R || Math.abs(c.cz - cz) > R) {
                 c.dispose(this.scene);
                 this.chunks.delete(key);
+                this._invalidateCache();
             }
         }
     }
@@ -182,6 +414,8 @@ export class World {
             c.modified = true;
         }
         this.chunks.set(ckey(cx, cz), c);
+        this._invalidateCache();
+        this._initChunkLight(c);
         // 이웃 메시도 갱신 필요
         for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) this._touch(cx + dx, cz + dz);
         return c;
@@ -213,6 +447,7 @@ export class World {
     clear() {
         for (const c of this.chunks.values()) c.dispose(this.scene);
         this.chunks.clear();
+        this._invalidateCache();
         this.mods.clear();
         this.genQueue = [];
         this._lastCx = this._lastCz = null;

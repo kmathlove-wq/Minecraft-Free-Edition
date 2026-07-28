@@ -5,7 +5,7 @@
 //  - 하늘빛/블록빛 BFS 전파 + 부드러운 조명 (smooth lighting)
 import * as THREE from 'three';
 import { atlas } from './textures.js';
-import { IS_OPAQUE, BLOCKS_SKY, LIGHT_EMIT, RENDER_KIND, blocks, AIR, B } from './blocks.js';
+import { IS_OPAQUE, RENDER_KIND, blocks, AIR } from './blocks.js';
 import { CHUNK_SIZE, WORLD_HEIGHT, CHUNK_VOL, idx, BIOME_INFO } from './worldgen.js';
 
 const PAD = CHUNK_SIZE + 2;                       // 18
@@ -16,10 +16,6 @@ const pidx = (x, y, z) => (y * PAD + z) * PAD + x;
 const padBuf = new Uint8Array(PVOL);
 const skyBuf = new Uint8Array(PVOL);
 const blkBuf = new Uint8Array(PVOL);
-const colTop = new Int16Array(PAD * PAD);
-const QCAP = 1 << 19;                 // 셀이 여러 번 재삽입될 수 있어 넉넉히 잡는다
-const QMASK = QCAP - 1;
-const queue = new Int32Array(QCAP);
 
 // 면 정의: dir, u축, v축 (외부에서 볼 때 u=오른쪽, v=위)
 const FACE = [
@@ -48,6 +44,8 @@ export class Chunk {
     constructor(cx, cz) {
         this.cx = cx; this.cz = cz;
         this.data = new Uint8Array(CHUNK_VOL);
+        /** 조명: 상위 4비트 = 하늘빛, 하위 4비트 = 블록빛 (월드 단위로 전파됨) */
+        this.light = new Uint8Array(CHUNK_VOL);
         this.heightMap = new Int16Array(CHUNK_SIZE * CHUNK_SIZE);
         this.biomeMap = new Uint8Array(CHUNK_SIZE * CHUNK_SIZE);
         this.maxY = 0;
@@ -189,7 +187,13 @@ class Buf {
 
 /** 이웃 청크까지 포함한 18×128×18 블록/조명 버퍼 구성 */
 function fillPad(chunk, getChunk) {
-    padBuf.fill(0);
+    // 면은 chunk.maxY 까지만 만들고 이웃 샘플링도 maxY+1 을 넘지 않으므로
+    // 그 위쪽은 복사할 필요가 없다 (기본값: 공기 + 하늘빛 15).
+    const yLimit = Math.min(WORLD_HEIGHT - 1, chunk.maxY + 1);
+    const cells = (yLimit + 1) * PAD * PAD;
+    padBuf.fill(0, 0, cells);
+    skyBuf.fill(15, 0, cells);   // 로드되지 않은 곳은 하늘빛으로 (경계가 검게 보이지 않도록)
+    blkBuf.fill(0, 0, cells);
     const SRC_STRIDE = CHUNK_SIZE * CHUNK_SIZE;   // 소스 y 스트라이드
     const DST_STRIDE = PAD * PAD;                 // 패딩 y 스트라이드
     for (let pz = 0; pz < PAD; pz++) {
@@ -199,81 +203,16 @@ function fillPad(chunk, getChunk) {
             const ccx = Math.floor(wx / CHUNK_SIZE), ccz = Math.floor(wz / CHUNK_SIZE);
             const src = (ccx === chunk.cx && ccz === chunk.cz) ? chunk : getChunk(ccx, ccz);
             if (!src || !src.generated) continue;
-            const sd = src.data;
+            const sd = src.data, sl = src.light;
             let si = (wz - ccz * CHUNK_SIZE) * CHUNK_SIZE + (wx - ccx * CHUNK_SIZE);
             let di = pz * PAD + px;
-            const top = src.maxY;
-            for (let y = 0; y <= top; y++, si += SRC_STRIDE, di += DST_STRIDE) padBuf[di] = sd[si];
-        }
-    }
-}
-
-/** 하늘빛 + 블록빛 BFS */
-function computeLight(maxY) {
-    skyBuf.fill(0);
-    blkBuf.fill(0);
-    let qt = 0;
-    const top = Math.min(WORLD_HEIGHT - 1, maxY + 2);
-
-    // --- 하늘빛: 각 기둥의 최상단부터 불투명 블록을 만날 때까지 15 ---
-    // colTop[col] = 그 기둥에서 하늘이 보이는 가장 낮은 y
-    for (let pz = 0; pz < PAD; pz++) {
-        for (let px = 0; px < PAD; px++) {
-            let y = WORLD_HEIGHT - 1;
-            let i = pidx(px, y, pz);
-            for (; y >= 0; y--, i -= PAD * PAD) {
-                if (BLOCKS_SKY[padBuf[i]]) break;      // 물·잎 아래는 BFS 로 감쇠 전파
-                skyBuf[i] = 15;
+            for (let y = 0; y <= yLimit; y++, si += SRC_STRIDE, di += DST_STRIDE) {
+                padBuf[di] = sd[si];
+                const L = sl[si];
+                skyBuf[di] = L >> 4;
+                blkBuf[di] = L & 15;
             }
-            colTop[pz * PAD + px] = y + 1;
         }
-    }
-    // 전부 밝은 영역을 큐에 넣으면 낭비이므로, 어두운 이웃이 있는 셀만 시드로 쓴다
-    for (let pz = 0; pz < PAD; pz++) {
-        for (let px = 0; px < PAD; px++) {
-            const col = pz * PAD + px;
-            let maxNb = 0;
-            if (px > 0) maxNb = Math.max(maxNb, colTop[col - 1]);
-            if (px < PAD - 1) maxNb = Math.max(maxNb, colTop[col + 1]);
-            if (pz > 0) maxNb = Math.max(maxNb, colTop[col - PAD]);
-            if (pz < PAD - 1) maxNb = Math.max(maxNb, colTop[col + PAD]);
-            const hi = Math.min(maxNb - 1, top);
-            for (let y = colTop[col]; y <= hi; y++) queue[qt++ & QMASK] = pidx(px, y, pz);
-        }
-    }
-    bfs(skyBuf, qt);
-
-    // --- 블록빛 시드 (횃불·발광석·용암) ---
-    qt = 0;
-    for (let y = 0; y <= top; y++)
-        for (let pz = 0; pz < PAD; pz++)
-            for (let px = 0; px < PAD; px++) {
-                const i = pidx(px, y, pz);
-                const e = LIGHT_EMIT[padBuf[i]];
-                if (e > 0) { blkBuf[i] = e; queue[qt++ & QMASK] = i; }
-            }
-    bfs(blkBuf, qt);
-}
-
-function bfs(field, qt) {
-    const STEP_Z = PAD, STEP_Y = PAD * PAD;
-    let qh = 0;
-    while (qh < qt) {
-        const i = queue[qh++ & QMASK];
-        const l = field[i];
-        if (l <= 1) continue;
-        const y = (i / STEP_Y) | 0;
-        const rem = i - y * STEP_Y;
-        const pz = (rem / PAD) | 0;
-        const px = rem - pz * PAD;
-        const nl = l - 1;
-        let j;
-        if (px > 0)          { j = i - 1;      if (!IS_OPAQUE[padBuf[j]] && field[j] < nl) { field[j] = nl; queue[qt++ & QMASK] = j; } }
-        if (px < PAD - 1)    { j = i + 1;      if (!IS_OPAQUE[padBuf[j]] && field[j] < nl) { field[j] = nl; queue[qt++ & QMASK] = j; } }
-        if (pz > 0)          { j = i - STEP_Z; if (!IS_OPAQUE[padBuf[j]] && field[j] < nl) { field[j] = nl; queue[qt++ & QMASK] = j; } }
-        if (pz < PAD - 1)    { j = i + STEP_Z; if (!IS_OPAQUE[padBuf[j]] && field[j] < nl) { field[j] = nl; queue[qt++ & QMASK] = j; } }
-        if (y > 0)           { j = i - STEP_Y; if (!IS_OPAQUE[padBuf[j]] && field[j] < nl) { field[j] = nl; queue[qt++ & QMASK] = j; } }
-        if (y < WORLD_HEIGHT - 1) { j = i + STEP_Y; if (!IS_OPAQUE[padBuf[j]] && field[j] < nl) { field[j] = nl; queue[qt++ & QMASK] = j; } }
     }
 }
 
@@ -294,7 +233,6 @@ const _vTmp = [[0, 0, 0], [0, 0, 0], [0, 0, 0], [0, 0, 0]];
  */
 export function buildChunkMesh(chunk, getChunk) {
     fillPad(chunk, getChunk);
-    computeLight(chunk.maxY);
 
     const solid = new Buf(), cross = new Buf(), liquid = new Buf();
     const top = Math.min(WORLD_HEIGHT - 1, chunk.maxY);
