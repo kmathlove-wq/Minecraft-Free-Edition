@@ -155,6 +155,14 @@ canvas { display: block; }
 #gui-panel .sep { height: 10px; }
 .grid { display: grid; grid-template-columns: repeat(9, 44px); gap: 2px; }
 .inv-grid { grid-template-columns: repeat(9, 44px); }
+#creative-search {
+    width: 100%; margin-bottom: 8px; padding: 6px 8px;
+    background: #8b8b8b; color: #fff;
+    border: 2px solid #373737; border-top-color: #fff; border-left-color: #fff;
+    font: 13px/1.4 'Malgun Gothic', sans-serif; outline: none;
+}
+#creative-search::placeholder { color: #d8d8d8; }
+
 .creative-grid {
     grid-template-columns: repeat(12, 44px);
     /* 아래쪽 인벤토리 + 핫바가 같이 보이도록 목록 높이를 제한한다 */

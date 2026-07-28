@@ -99,11 +99,25 @@ export class UI {
 
         if (kind === 'creative') {
             $('h3', null, p).textContent = '크리에이티브 아이템';
+            const search = document.createElement('input');
+            search.id = 'creative-search';
+            search.type = 'text';
+            search.placeholder = '아이템 검색 (예: 부싯돌, flint)';
+            search.autocomplete = 'off';
+            search.addEventListener('keydown', e => e.stopPropagation());
+            p.appendChild(search);
             const grid = $('div', 'grid creative-grid', p);
             for (const [id, it] of items) {
                 const el = this._slotEl({ area: 'creative', id });
+                el.dataset.search = (id + ' ' + it.display).toLowerCase();
                 grid.appendChild(el);
             }
+            search.addEventListener('input', () => {
+                const q = search.value.trim().toLowerCase();
+                for (const el of grid.children)
+                    el.style.display = (!q || el.dataset.search.includes(q)) ? '' : 'none';
+            });
+            setTimeout(() => search.focus(), 0);
         } else if (kind === 'furnace') {
             $('h3', null, p).textContent = '화로';
             const row = $('div', 'furnace-row', p);
