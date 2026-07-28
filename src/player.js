@@ -3,7 +3,7 @@
 //   걷기 4.317 m/s · 달리기 5.612 m/s · 웅크리기 1.295 m/s
 //   점프 높이 1.25블록 (v = sqrt(2·g·1.25), g = 32 m/s²)
 import { IS_SOLID, RENDER_KIND, blocks, AIR, B } from './blocks.js';
-import { WORLD_HEIGHT } from './worldgen.js';
+import { WORLD_HEIGHT, MIN_Y, MAX_Y } from './worldgen.js';
 
 export const PW = 0.6;                 // 폭
 export const PH = 1.8;                 // 키
@@ -61,7 +61,7 @@ export class Player {
         const z0 = Math.floor(z - hw + EPS), z1 = Math.floor(z + hw - EPS);
         const y0 = Math.floor(y + EPS), y1 = Math.floor(y + h - EPS);
         for (let by = y0; by <= y1; by++) {
-            if (by < 0 || by >= WORLD_HEIGHT) continue;
+            if (by < MIN_Y || by > MAX_Y) continue;
             for (let bx = x0; bx <= x1; bx++)
                 for (let bz = z0; bz <= z1; bz++)
                     if (IS_SOLID[this.world.getBlock(bx, by, bz)]) return true;
@@ -152,7 +152,7 @@ export class Player {
             this.vel.y += (ty - this.vel.y) * t;
             this.vel.z += (tz - this.vel.z) * t;
             this.pos.x += this.vel.x * dt;
-            this.pos.y = Math.max(-40, Math.min(WORLD_HEIGHT + 40, this.pos.y + this.vel.y * dt));
+            this.pos.y = Math.max(MIN_Y - 40, Math.min(MAX_Y + 40, this.pos.y + this.vel.y * dt));
             this.pos.z += this.vel.z * dt;
             return;
         }
@@ -254,7 +254,7 @@ export class Player {
         }
 
         this._survivalTick(dt);
-        if (this.pos.y < -20) this.damage(4);
+        if (this.pos.y < MIN_Y - 12) this.damage(4);
     }
 
     // 20 tps 생존 로직

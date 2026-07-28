@@ -2,6 +2,7 @@
 // 마인크래프트 1일 = 24000틱 = 실제 20분, 낮 0~12000 / 밤 12000~24000
 import * as THREE from 'three';
 import { sharedUniforms } from './chunk.js';
+import { DIMENSIONS } from './dimensions.js';
 
 export const DAY_TICKS = 24000;
 const TICKS_PER_SEC = 20;
@@ -67,6 +68,7 @@ export class Sky {
         this.camera = camera;
         this.time = 1000;           // 아침에서 시작
         this.paused = false;
+        this.dimension = 'overworld';
 
         scene.background = COL_DAY.clone();
         scene.fog = new THREE.Fog(FOG_DAY.clone(), 40, 140);
@@ -128,8 +130,41 @@ export class Sky {
 
     setTime(t) { this.time = ((t % DAY_TICKS) + DAY_TICKS) % DAY_TICKS; }
 
+    /** 차원에 맞춰 하늘·안개·최소 밝기를 바꾼다 */
+    setDimension(name) {
+        const d = DIMENSIONS[name] ?? DIMENSIONS.overworld;
+        this.dimension = name;
+        sharedUniforms.ambientMin.value = d.ambient;
+        const overworld = !!d.hasSky;
+        this.sun.visible = this.moon.visible = overworld;
+        this.clouds.visible = overworld;
+        this.stars.visible = name !== 'nether';
+        if (!overworld) {
+            this.scene.background.setHex(d.skyColor);
+            this.scene.fog.color.setHex(d.fog);
+            this.starMat.opacity = name === 'end' ? 0.8 : 0;
+        }
+    }
+
     update(dt, camPos, renderDistance) {
         if (!this.paused) this.time = (this.time + dt * TICKS_PER_SEC) % DAY_TICKS;
+
+        // 네더·엔드는 하늘이 없다: 고정된 어두운 배경과 짙은 안개
+        if (this.dimension !== 'overworld') {
+            const d = DIMENSIONS[this.dimension];
+            sharedUniforms.skyBrightness.value = 0;      // 하늘빛 없음 (블록빛만)
+            this.scene.background.setHex(d.skyColor);
+            this.scene.fog.color.setHex(d.fog);
+            const far = renderDistance * 16;
+            this.scene.fog.near = this.dimension === 'nether' ? far * 0.15 : far * 0.55;
+            this.scene.fog.far = far * (this.dimension === 'nether' ? 0.75 : 1.0);
+            this.sunLight.intensity = 0.35;
+            this.sunLight.position.set(0.3, 1, 0.4).normalize();
+            this.ambient.intensity = 0.55;
+            this.group.position.copy(camPos);
+            this.clouds.position.set(camPos.x, 1e5, camPos.z);
+            return;
+        }
 
         // 태양 각도: 0틱=일출 직전(동쪽 아래), 6000틱=정오
         const ang = ((this.time - 6000) / DAY_TICKS) * Math.PI * 2;

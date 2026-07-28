@@ -63,9 +63,9 @@ const plain = (hex, amp, sp, spHex) => (p, r) => {
 };
 
 /** 광석: 돌 바탕 + 광물 덩어리 */
-const ore = (hex, blobs = 5) => (p, r) => {
-    fill(p, r, 0x7d7d7d, 14);
-    specks(p, r, 8, 0x6d6d6d, 6);
+const ore = (hex, blobs = 5, base = 0x7d7d7d, speck = 0x6d6d6d) => (p, r) => {
+    fill(p, r, base, 14);
+    specks(p, r, 8, speck, 6);
     for (let i = 0; i < blobs; i++) {
         const cx = 1 + ((r() * 13) | 0), cy = 1 + ((r() * 13) | 0);
         const w = 2 + ((r() * 2) | 0), h = 2 + ((r() * 2) | 0);
@@ -383,6 +383,48 @@ const TEX = {
     oak_sapling:      plant(0x6b4f2a, 0x4f8f36, 'sapling'),
     dead_bush:        plant(0x8a6a3a, 0, 'deadbush'),
     sugar_cane:       plant(0, 0x8bc44a, 'cane'),
+    // ---- 심층암 (y<0) ----
+    deepslate:        (p, r) => { fill(p, r, 0x50525a, 12); specks(p, r, 14, 0x40424a, 8); for (let y = 0; y < TILE; y += 5) for (let x = 0; x < TILE; x++) p.set(x, y, 0x464852, 255, ((r() * 2 - 1) * 6) | 0); },
+    ds_coal_ore:      ore(0x141414, 5, 0x50525a, 0x44464e),
+    ds_iron_ore:      ore(0xc9a48b, 5, 0x50525a, 0x44464e),
+    ds_copper_ore:    ore(0xc07a4a, 5, 0x50525a, 0x44464e),
+    ds_gold_ore:      ore(0xf7d94b, 4, 0x50525a, 0x44464e),
+    ds_redstone_ore:  ore(0xd60000, 5, 0x50525a, 0x44464e),
+    ds_lapis_ore:     ore(0x2f57b8, 5, 0x50525a, 0x44464e),
+    ds_diamond_ore:   ore(0x5decf5, 4, 0x50525a, 0x44464e),
+    ds_emerald_ore:   ore(0x17dd62, 3, 0x50525a, 0x44464e),
+    // ---- 네더 ----
+    soul_sand:        (p, r) => { fill(p, r, 0x543f34, 14); for (const [cx, cy] of [[4, 5], [11, 9], [7, 12]]) { for (let y = -2; y <= 2; y++) for (let x = -2; x <= 2; x++) { if (Math.hypot(x, y) > 2.2) continue; p.set(cx + x, cy + y, 0x3d2c24, 255, ((r() * 2 - 1) * 10) | 0); } } },
+    magma:            (p, r) => { fill(p, r, 0x8c3a15, 14); for (let i = 0; i < 26; i++) { const x = (r() * TILE) | 0, y = (r() * TILE) | 0; p.set(x, y, 0xffb43a, 255, ((r() * 2 - 1) * 30) | 0); p.set(x + 1, y, 0xd4711c, 255); } },
+    nether_bricks:    brick(0x2e161a, 0x1c0e10),
+    quartz_ore:       ore(0xe8e0d8, 5, 0x7a3131, 0x5e2323),
+    nether_portal:    (p, r) => {
+        for (let y = 0; y < TILE; y++)
+            for (let x = 0; x < TILE; x++) {
+                const w = Math.sin((x * 0.9 + y * 1.4)) * 26 + Math.sin(y * 2.3 - x * 0.6) * 20;
+                p.set(x, y, 0x8b3ecc, 210, (w + (r() * 2 - 1) * 14) | 0);
+            }
+    },
+    fire_tex:         (p, r) => {
+        clear(p);
+        for (let x = 0; x < TILE; x++) {
+            const h = 6 + ((Math.sin(x * 0.9) * 3 + r() * 5) | 0);
+            for (let y = 0; y < h; y++) {
+                const t = y / h;
+                p.set(x, 15 - y, t > 0.66 ? 0xffe066 : t > 0.33 ? 0xff9d2e : 0xd44a12, 255, ((r() * 2 - 1) * 20) | 0);
+            }
+        }
+    },
+    // ---- 엔드 ----
+    end_stone:        (p, r) => { fill(p, r, 0xdcdca8, 10); specks(p, r, 18, 0xc4c48c, 10); },
+    end_portal:       (p, r) => {
+        fill(p, r, 0x0a0416, 6);
+        for (let i = 0; i < 30; i++) p.set((r() * TILE) | 0, (r() * TILE) | 0, r() < 0.5 ? 0x9a7ae0 : 0xd8d0ff, 255, ((r() * 2 - 1) * 30) | 0);
+    },
+    end_frame_top:    (p, r) => { fill(p, r, 0x2e6b5e, 10); for (let y = 3; y < 13; y++) for (let x = 3; x < 13; x++) p.set(x, y, 0x1c4238, 255, ((r() * 2 - 1) * 8) | 0); },
+    end_frame_side:   (p, r) => { fill(p, r, 0xdcdca8, 10); for (let y = 0; y < 5; y++) for (let x = 0; x < TILE; x++) p.set(x, y, 0x2e6b5e, 255, ((r() * 2 - 1) * 8) | 0); },
+    end_frame_eye:    (p, r) => { fill(p, r, 0x2e6b5e, 10); for (let y = 3; y < 13; y++) for (let x = 3; x < 13; x++) p.set(x, y, 0x1c1030, 255, ((r() * 2 - 1) * 8) | 0); for (let i = 0; i < 18; i++) p.set(4 + ((r() * 8) | 0), 4 + ((r() * 8) | 0), 0x9a7ae0, 255, ((r() * 2 - 1) * 30) | 0); },
+    purpur:           (p, r) => { fill(p, r, 0xa779a7, 10); specks(p, r, 16, 0x8e628e, 10); },
     farmland:         (p, r) => { fill(p, r, 0x6a4a2f, 14); for (let x = 0; x < TILE; x += 4) for (let y = 0; y < TILE; y++) p.set(x, y, 0x4f3620, 255, ((r() * 2 - 1) * 8) | 0); },
     // 파괴 진행 오버레이 (0~9단계)
     break0: crack(0), break1: crack(1), break2: crack(2), break3: crack(3), break4: crack(4),
@@ -416,6 +458,16 @@ const TEX = {
     item_bone:        (p, r) => { clear(p); for (let i = 0; i < 8; i++) { p.set(4 + i, 11 - i, 0xe8e4d8); p.set(5 + i, 11 - i, 0xd8d4c4); } circle(p, 3, 12, 2, 0xe8e4d8); circle(p, 12, 3, 2, 0xe8e4d8); },
     item_feather:     (p, r) => { clear(p); for (let i = 0; i < 12; i++) { p.set(4 + ((i * 0.5) | 0), 13 - i, 0xf0f0f0); p.set(5 + ((i * 0.5) | 0), 13 - i, 0xd8d8d8); } },
     item_rotten:      (p, r) => { clear(p); circle(p, 8, 8, 6, 0x6d5a3a); circle(p, 6, 7, 2, 0x8a7550); for (const [x, y] of [[10, 6], [5, 11], [11, 10]]) circle(p, x, y, 1, 0x4a3d28); },
+    item_flint:       (p, r) => { clear(p); const pts = [[5, 5], [6, 4], [7, 4], [8, 5], [9, 5], [10, 6], [10, 7], [11, 8], [10, 9], [9, 10], [8, 11], [7, 11], [6, 10], [5, 9], [4, 8], [4, 7], [4, 6]]; for (let y = 4; y <= 11; y++) for (let x = 4; x <= 11; x++) { if (Math.hypot(x - 7.5, y - 7.5) > 3.8) continue; p.set(x, y, 0x3a3a42, 255, ((r() * 2 - 1) * 18) | 0); } for (const [x, y] of pts) p.set(x, y, 0x24242a, 255); p.set(6, 6, 0x5a5a66); p.set(7, 6, 0x5a5a66); },
+    item_flint_steel: (p, r) => {
+        clear(p);
+        for (let y = 3; y <= 9; y++) for (let x = 8; x <= 12; x++) { if (x === 12 && (y < 5 || y > 7)) continue; p.set(x, y, 0xb8b8c0, 255, ((r() * 2 - 1) * 12) | 0); }
+        for (let y = 8; y <= 13; y++) for (let x = 3; x <= 8; x++) { if (Math.hypot(x - 5.5, y - 10.5) > 3) continue; p.set(x, y, 0x6b4f2a, 255, ((r() * 2 - 1) * 12) | 0); }
+        p.set(11, 2, 0xffd452); p.set(12, 2, 0xff9d2e); p.set(12, 3, 0xffe066);
+    },
+    item_ender_pearl: (p, r) => { clear(p); circle(p, 8, 8, 5, 0x1a5f52); circle(p, 8, 8, 3, 0x2e9c85); circle(p, 6, 6, 1, 0x8ce8d0); },
+    item_ender_eye:   (p, r) => { clear(p); circle(p, 8, 8, 5, 0x1a5f52); circle(p, 8, 8, 3, 0xd8f0a0); circle(p, 8, 8, 1, 0x2a2a2a); },
+    item_quartz:      (p, r) => { clear(p); gem(p, 0xece5de); },
     // 도구 아이콘
     tool_wood_pick:   toolIcon('pick', 0xa47c50),
     tool_stone_pick:  toolIcon('pick', 0x8a8a8a),

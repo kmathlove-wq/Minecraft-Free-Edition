@@ -6,11 +6,11 @@
 import * as THREE from 'three';
 import { atlas } from './textures.js';
 import { IS_OPAQUE, RENDER_KIND, blocks, AIR } from './blocks.js';
-import { CHUNK_SIZE, WORLD_HEIGHT, CHUNK_VOL, idx, BIOME_INFO } from './worldgen.js';
+import { CHUNK_SIZE, WORLD_HEIGHT, MIN_Y, MAX_Y, CHUNK_VOL, idx, BIOME_INFO } from './worldgen.js';
 
 const PAD = CHUNK_SIZE + 2;                       // 18
 const PVOL = PAD * WORLD_HEIGHT * PAD;
-const pidx = (x, y, z) => (y * PAD + z) * PAD + x;
+const pidx = (x, wy, z) => ((wy - MIN_Y) * PAD + z) * PAD + x;
 
 // 재사용 스크래치 버퍼 (프레임마다 재할당하지 않음)
 const padBuf = new Uint8Array(PVOL);
@@ -55,23 +55,24 @@ export class Chunk {
         this.modified = false;   // 플레이어가 손댄 청크
     }
     get(x, y, z) {
-        if (y < 0 || y >= WORLD_HEIGHT) return AIR;
+        if (y < MIN_Y || y > MAX_Y) return AIR;
         return this.data[idx(x, y, z)];
     }
     set(x, y, z, v) {
-        if (y < 0 || y >= WORLD_HEIGHT) return;
+        if (y < MIN_Y || y > MAX_Y) return;
         this.data[idx(x, y, z)] = v;
         if (v !== AIR && y > this.maxY) this.maxY = y;
         this.dirty = true;
     }
     recomputeMaxY() {
-        for (let y = WORLD_HEIGHT - 1; y >= 0; y--) {
-            const base = y * CHUNK_SIZE * CHUNK_SIZE;
-            for (let i = 0; i < CHUNK_SIZE * CHUNK_SIZE; i++) {
-                if (this.data[base + i] !== AIR) { this.maxY = y; return; }
+        const AREA = CHUNK_SIZE * CHUNK_SIZE;
+        for (let layer = WORLD_HEIGHT - 1; layer >= 0; layer--) {
+            const base = layer * AREA;
+            for (let i = 0; i < AREA; i++) {
+                if (this.data[base + i] !== AIR) { this.maxY = layer + MIN_Y; return; }
             }
         }
-        this.maxY = 0;
+        this.maxY = MIN_Y;
     }
     dispose(scene) {
         if (!this.meshes) return;
@@ -105,6 +106,7 @@ void main() {
 const FRAG = /* glsl */`
 uniform sampler2D map;
 uniform float skyBrightness;
+uniform float ambientMin;
 uniform float alphaCut;
 uniform float opacity;
 varying vec3 vCol;
@@ -116,7 +118,7 @@ void main() {
     vec4 tex = texture2D( map, vUvA );
     if ( tex.a < alphaCut ) discard;
     float l = max( vLight.x * skyBrightness, vLight.y );
-    l = clamp( l, 0.05, 1.0 );
+    l = clamp( l, ambientMin, 1.0 );
     float b = l * l * 0.55 + l * 0.45;      // 마인크래프트 밝기 곡선 근사
     gl_FragColor = vec4( tex.rgb * vCol * b, tex.a * opacity );
     #include <tonemapping_fragment>
@@ -126,14 +128,15 @@ void main() {
 
 export const sharedUniforms = {
     map: { value: atlas.texture },
-    skyBrightness: { value: 1.0 }
+    skyBrightness: { value: 1.0 },
+    ambientMin: { value: 0.05 }      // 차원마다 다르다 (네더는 은은하게 밝다)
 };
 
 function makeMaterial(opts) {
     const mat = new THREE.ShaderMaterial({
         uniforms: THREE.UniformsUtils.merge([
             THREE.UniformsLib.fog,
-            { map: { value: null }, skyBrightness: { value: 1 }, alphaCut: { value: opts.alphaCut }, opacity: { value: opts.opacity ?? 1 } }
+            { map: { value: null }, skyBrightness: { value: 1 }, ambientMin: { value: 0.05 }, alphaCut: { value: opts.alphaCut }, opacity: { value: opts.opacity ?? 1 } }
         ]),
         vertexShader: VERT,
         fragmentShader: FRAG,
@@ -144,6 +147,7 @@ function makeMaterial(opts) {
     });
     mat.uniforms.map = sharedUniforms.map;
     mat.uniforms.skyBrightness = sharedUniforms.skyBrightness;
+    mat.uniforms.ambientMin = sharedUniforms.ambientMin;
     return mat;
 }
 
@@ -189,8 +193,8 @@ class Buf {
 function fillPad(chunk, getChunk) {
     // 면은 chunk.maxY 까지만 만들고 이웃 샘플링도 maxY+1 을 넘지 않으므로
     // 그 위쪽은 복사할 필요가 없다 (기본값: 공기 + 하늘빛 15).
-    const yLimit = Math.min(WORLD_HEIGHT - 1, chunk.maxY + 1);
-    const cells = (yLimit + 1) * PAD * PAD;
+    const yLimit = Math.min(MAX_Y, chunk.maxY + 1);
+    const cells = (yLimit - MIN_Y + 1) * PAD * PAD;
     padBuf.fill(0, 0, cells);
     skyBuf.fill(15, 0, cells);   // 로드되지 않은 곳은 하늘빛으로 (경계가 검게 보이지 않도록)
     blkBuf.fill(0, 0, cells);
@@ -206,7 +210,7 @@ function fillPad(chunk, getChunk) {
             const sd = src.data, sl = src.light;
             let si = (wz - ccz * CHUNK_SIZE) * CHUNK_SIZE + (wx - ccx * CHUNK_SIZE);
             let di = pz * PAD + px;
-            for (let y = 0; y <= yLimit; y++, si += SRC_STRIDE, di += DST_STRIDE) {
+            for (let y = MIN_Y; y <= yLimit; y++, si += SRC_STRIDE, di += DST_STRIDE) {
                 padBuf[di] = sd[si];
                 const L = sl[si];
                 skyBuf[di] = L >> 4;
@@ -235,9 +239,9 @@ export function buildChunkMesh(chunk, getChunk) {
     fillPad(chunk, getChunk);
 
     const solid = new Buf(), cross = new Buf(), liquid = new Buf();
-    const top = Math.min(WORLD_HEIGHT - 1, chunk.maxY);
+    const top = Math.min(MAX_Y, chunk.maxY);
 
-    for (let y = 0; y <= top; y++) {
+    for (let y = MIN_Y; y <= top; y++) {
         for (let lz = 0; lz < CHUNK_SIZE; lz++) {
             for (let lx = 0; lx < CHUNK_SIZE; lx++) {
                 const blk = chunk.data[idx(lx, y, lz)];
@@ -261,8 +265,8 @@ export function buildChunkMesh(chunk, getChunk) {
                 for (let f = 0; f < FACE.length; f++) {
                     const F = FACE[f];
                     const nx = px + F.d[0], ny = y + F.d[1], nz = pz + F.d[2];
-                    if (ny < 0) continue;                       // 월드 바닥면은 그리지 않음
-                    const nb = ny >= WORLD_HEIGHT ? AIR : padBuf[pidx(nx, ny, nz)];
+                    if (ny < MIN_Y) continue;                    // 월드 바닥면은 그리지 않음
+                    const nb = ny > MAX_Y ? AIR : padBuf[pidx(nx, ny, nz)];
                     if (IS_OPAQUE[nb]) continue;
                     if (nb === blk && def.cullSame) continue;
                     if (kind === 3 && RENDER_KIND[nb] === 3) continue;
@@ -343,7 +347,7 @@ export function buildChunkMesh(chunk, getChunk) {
 const _nOp = new Uint8Array(9), _nSky = new Uint8Array(9), _nBlk = new Uint8Array(9);
 
 function safeIdx(px, y, pz) {
-    if (y < 0 || y >= WORLD_HEIGHT || px < 0 || px >= PAD || pz < 0 || pz >= PAD) return -1;
+    if (y < MIN_Y || y > MAX_Y || px < 0 || px >= PAD || pz < 0 || pz >= PAD) return -1;
     return pidx(px, y, pz);
 }
 /** 십자형 식물 (2장의 교차 평면) */

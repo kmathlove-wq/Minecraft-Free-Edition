@@ -2,7 +2,7 @@
 import * as THREE from 'three';
 import { atlas } from './src/textures.js';
 import { B, blocks, itemOf, breakTime, canHarvest, AIR, TOOL } from './src/blocks.js';
-import { CHUNK_SIZE, WORLD_HEIGHT, SEA_LEVEL, BIOME_INFO } from './src/worldgen.js';
+import { CHUNK_SIZE, WORLD_HEIGHT, MIN_Y, MAX_Y, SEA_LEVEL, BIOME_INFO } from './src/worldgen.js';
 import { World } from './src/world.js';
 import { materials, sharedUniforms } from './src/chunk.js';
 import { Player, PW, PH } from './src/player.js';
@@ -13,6 +13,8 @@ import { MobManager } from './src/mobs.js';
 import { sfx, resumeAudio } from './src/audio.js';
 import { listSaves, saveGame, applySave, deleteSave, renameSave } from './src/save.js';
 import { Console } from './src/commands.js';
+import { tryLightPortal, travel, tryActivateEndPortal } from './src/portals.js';
+import { DIMENSIONS } from './src/dimensions.js';
 
 // ---------------- 렌더러 / 씬 ----------------
 const renderer = new THREE.WebGLRenderer({ antialias: false, powerPreference: 'high-performance' });
@@ -492,7 +494,9 @@ function destroyBlock(x, y, z) {
 
     if (player.gamemode === 'survival') {
         const held = inventory.heldItem();
-        if (def.drop && canHarvest(def, held)) {
+        if (def.flintChance > 0 && Math.random() < def.flintChance) {
+            spawnDrop('flint', 1, x + 0.5, y + 0.5, z + 0.5);        // 자갈에서 부싯돌
+        } else if (def.drop && canHarvest(def, held)) {
             spawnDrop(def.drop, def.dropCount, x + 0.5, y + 0.5, z + 0.5);
         }
         if (held?.tool) inventory.damageHeld(1);
@@ -526,7 +530,30 @@ function useHeld() {
     const it = itemOf(s.id);
     if (!it) return;
 
-    // 2) 음식
+    // 2) 부싯돌과 부시: 흑요석 틀이면 네더 차원문, 아니면 불
+    if (s.id === 'flint_and_steel' && target) {
+        const fx = target.x + target.nx, fy = target.y + target.ny, fz = target.z + target.nz;
+        if (tryLightPortal(world, fx, fy, fz)) {
+            sfx.pop();
+            ui.showItemName('네더 차원문이 열렸습니다');
+        } else if (world.getBlock(fx, fy, fz) === AIR && world.isSolid(fx, fy - 1, fz)) {
+            world.setBlock(fx, fy, fz, B.FIRE);
+            sfx.dig('wood');
+        }
+        if (player.gamemode === 'survival') inventory.damageHeld(1);
+        return;
+    }
+
+    // 3) 엔더의 눈: 엔드 차원문 틀에 끼운다
+    if (s.id === 'ender_eye' && target && world.getBlock(target.x, target.y, target.z) === B.END_PORTAL_FRAME) {
+        world.setBlock(target.x, target.y, target.z, B.END_PORTAL_FRAME_EYE);
+        if (player.gamemode === 'survival') inventory.consumeHeld(1);
+        sfx.pop();
+        if (tryActivateEndPortal(world, target.x, target.y, target.z)) ui.showItemName('엔드 차원문이 열렸습니다');
+        return;
+    }
+
+    // 4) 음식
     if (it.food) { eatTimer = 0.0001; return; }
 
     // 3) 블록 설치
@@ -537,7 +564,7 @@ function useHeld() {
 }
 
 function placeBlock(x, y, z, id) {
-    if (y < 0 || y >= WORLD_HEIGHT) return;
+    if (y < MIN_Y || y > MAX_Y) return;
     const existing = world.getBlock(x, y, z);
     if (existing !== AIR && blocks[existing].render !== 'liquid') return;
 
@@ -654,9 +681,9 @@ function newWorld() {
         world.clear();
         mobs.clear();
         drops.length = 0;
-        world.seed = (Math.random() * 2147483647) | 0;
-        world.gen.seed = world.seed;
-        world.gen._hCache?.clear?.();
+        world.setSeed((Math.random() * 2147483647) | 0);
+        world.setDimension('overworld');
+        sky.setDimension('overworld');
         inventory.slots.fill(null);
         sky.setTime(1000);
         player.health = 20; player.food = 20; player.dead = false;
@@ -693,6 +720,47 @@ function spawnPlayer() {
     player.vel = { x: 0, y: 0, z: 0 };
     player.yaw = 0; player.pitch = 0;
 }
+
+// ---------------- 차원 이동 ----------------
+let portalTimer = 0, portalCooldown = 0;
+
+function updatePortal(dt) {
+    portalCooldown = Math.max(0, portalCooldown - dt);
+    const px = Math.floor(player.pos.x), pz = Math.floor(player.pos.z);
+    const feet = world.getBlock(px, Math.floor(player.pos.y + 0.2), pz);
+    const head = world.getBlock(px, Math.floor(player.eyeY), pz);
+
+    // 엔드 차원문은 닿는 즉시 이동
+    if (feet === B.END_PORTAL || head === B.END_PORTAL) {
+        if (portalCooldown <= 0) switchDimension(world.dimension === 'end' ? 'overworld' : 'end');
+        return;
+    }
+    if (feet === B.NETHER_PORTAL || head === B.NETHER_PORTAL) {
+        if (portalCooldown > 0) { portalTimer = 0; return; }   // 도착 직후에는 되돌아가지 않는다
+        portalTimer += dt;
+        const need = player.gamemode === 'creative' ? 0.25 : 1.5;
+        if (portalTimer >= need && portalCooldown <= 0)
+            switchDimension(world.dimension === 'nether' ? 'overworld' : 'nether');
+    } else portalTimer = 0;
+}
+
+function switchDimension(to) {
+    const from = world.dimension;
+    showLoading(true);
+    portalTimer = 0;
+    portalCooldown = 4;
+    drops.length = 0;
+    mobs.clear();
+    sfx.splash();
+    // 한 프레임 뒤에 실행해 로딩 화면이 보이도록
+    setTimeout(() => {
+        travel(game, from, to);
+        ui.showItemName(DIMENSIONS[to].name + ' 도착');
+        chat.log('차원 이동: ' + DIMENSIONS[from].name + ' → ' + DIMENSIONS[to].name);
+        showLoading(false);
+    }, 30);
+}
+game.switchDimension = switchDimension;
 
 // ---------------- 죽음 ----------------
 const deathScreen = document.getElementById('death-screen');
@@ -732,6 +800,11 @@ function animate() {
     updateDrops(dt);
     sky.update(paused ? dt * 0 : dt, camera.position, world.renderDistance);
 
+    // 차원문 안에서는 화면이 보랏빛으로 물든다
+    const inPortal = world.getBlock(Math.floor(player.pos.x), Math.floor(player.eyeY), Math.floor(player.pos.z));
+    document.getElementById('portal-overlay').style.opacity =
+        (inPortal === B.NETHER_PORTAL || inPortal === B.END_PORTAL) ? 0.55 : 0;
+
     // 수중에서는 시야가 짧고 푸르게 (마인크래프트와 동일)
     if (player.headInWater) {
         scene.fog.color.setRGB(0.06, 0.17, 0.42);
@@ -761,6 +834,8 @@ function animate() {
         setCrackStage(-1);
     }
 
+    if (active) updatePortal(dt);
+
     // 화로 진행
     for (const f of furnaces.values()) f.tick(dt);
     ui.updateFurnace();
@@ -789,7 +864,7 @@ function animate() {
             `FPS ${fps}\n` +
             `XYZ ${player.pos.x.toFixed(2)} / ${player.pos.y.toFixed(2)} / ${player.pos.z.toFixed(2)}\n` +
             `블록 ${bx} ${by} ${bz}  청크 ${Math.floor(bx / 16)} ${Math.floor(bz / 16)}\n` +
-            `바이옴 ${world.biomeNameAt(bx, bz)}\n` +
+            `차원 ${DIMENSIONS[world.dimension].name} · 바이오무 ${world.dimension === 'overworld' ? world.biomeNameAt(bx, bz) : '-'}\n` +
             `시간 ${Math.floor(sky.time)} (${sky.isNight ? '밤' : '낮'})\n` +
             `청크 ${world.stats.chunks}  몹 ${mobs.mobs.length}  드롭 ${drops.length}\n` +
             `메시 ${world.stats.meshMs.toFixed(1)}ms  생성 ${world.stats.genMs.toFixed(1)}ms\n` +

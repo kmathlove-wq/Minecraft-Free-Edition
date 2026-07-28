@@ -48,7 +48,8 @@ function def(name, o = {}) {
         liquid: o.render === 'liquid',
         placeable: o.placeable ?? true,
         needsSupport: o.needsSupport ?? false,
-        stepSound: o.stepSound ?? 'stone'
+        stepSound: o.stepSound ?? 'stone',
+        flintChance: o.flintChance ?? 0    // 자갈에서 부싯돌이 나올 확률
     };
     blocks.push(b);
     blockByName.set(name, b);
@@ -74,7 +75,7 @@ B.SNOWY_GRASS = def('snowy_grass_block', {
 B.COBBLESTONE = def('cobblestone', { display: '조약돌', all: 'cobblestone', hardness: 2, tool: TOOL.PICKAXE, tier: TIER.WOOD });
 B.BEDROCK = def('bedrock', { display: '기반암', all: 'bedrock', hardness: -1, drop: null });
 B.SAND = def('sand', { display: '모래', all: 'sand', hardness: 0.5, tool: TOOL.SHOVEL, gravity: true, stepSound: 'sand' });
-B.GRAVEL = def('gravel', { display: '자갈', all: 'gravel', hardness: 0.6, tool: TOOL.SHOVEL, gravity: true, stepSound: 'gravel' });
+B.GRAVEL = def('gravel', { display: '자갈', all: 'gravel', hardness: 0.6, tool: TOOL.SHOVEL, gravity: true, stepSound: 'gravel', flintChance: 0.25 });
 B.CLAY = def('clay', { display: '점토', all: 'clay', hardness: 0.6, tool: TOOL.SHOVEL, drop: 'clay_ball', dropCount: 4 });
 B.WATER = def('water', {
     display: '물', all: 'water', render: 'liquid', solid: false, opaque: false,
@@ -155,6 +156,48 @@ B.CORNFLOWER = def('cornflower', { display: '수레국화', all: 'cornflower', r
 B.OAK_SAPLING = def('oak_sapling', { display: '참나무 묘목', all: 'oak_sapling', render: 'cross', solid: false, opaque: false, hardness: 0, needsSupport: true, stepSound: 'grass' });
 B.DEAD_BUSH = def('dead_bush', { display: '죽은 덤불', all: 'dead_bush', render: 'cross', solid: false, opaque: false, hardness: 0, drop: 'stick', needsSupport: true, stepSound: 'grass' });
 B.SUGAR_CANE = def('sugar_cane', { display: '사탕수수', all: 'sugar_cane', render: 'cross', solid: false, opaque: false, hardness: 0, needsSupport: true, stepSound: 'grass' });
+// ---- 심층암 (y < 0) ----
+B.DEEPSLATE = def('deepslate', { display: '심층암', all: 'deepslate', hardness: 3, tool: TOOL.PICKAXE, tier: TIER.WOOD, drop: 'cobbled_deepslate' });
+B.COBBLED_DEEPSLATE = def('cobbled_deepslate', { display: '조약심층암', all: 'deepslate', hardness: 3.5, tool: TOOL.PICKAXE, tier: TIER.WOOD });
+B.DS_COAL_ORE = def('deepslate_coal_ore', { display: '심층암 석탄 광석', all: 'ds_coal_ore', hardness: 4.5, tool: TOOL.PICKAXE, tier: TIER.WOOD, drop: 'coal' });
+B.DS_IRON_ORE = def('deepslate_iron_ore', { display: '심층암 철 광석', all: 'ds_iron_ore', hardness: 4.5, tool: TOOL.PICKAXE, tier: TIER.STONE, drop: 'raw_iron' });
+B.DS_COPPER_ORE = def('deepslate_copper_ore', { display: '심층암 구리 광석', all: 'ds_copper_ore', hardness: 4.5, tool: TOOL.PICKAXE, tier: TIER.STONE, drop: 'raw_copper', dropCount: 3 });
+B.DS_GOLD_ORE = def('deepslate_gold_ore', { display: '심층암 금 광석', all: 'ds_gold_ore', hardness: 4.5, tool: TOOL.PICKAXE, tier: TIER.IRON, drop: 'raw_gold' });
+B.DS_REDSTONE_ORE = def('deepslate_redstone_ore', { display: '심층암 레드스톤 광석', all: 'ds_redstone_ore', hardness: 4.5, tool: TOOL.PICKAXE, tier: TIER.IRON, drop: 'redstone', dropCount: 4 });
+B.DS_LAPIS_ORE = def('deepslate_lapis_ore', { display: '심층암 청금석 광석', all: 'ds_lapis_ore', hardness: 4.5, tool: TOOL.PICKAXE, tier: TIER.STONE, drop: 'lapis_lazuli', dropCount: 6 });
+B.DS_DIAMOND_ORE = def('deepslate_diamond_ore', { display: '심층암 다이아몬드 광석', all: 'ds_diamond_ore', hardness: 4.5, tool: TOOL.PICKAXE, tier: TIER.IRON, drop: 'diamond' });
+B.DS_EMERALD_ORE = def('deepslate_emerald_ore', { display: '심층암 에메랄드 광석', all: 'ds_emerald_ore', hardness: 4.5, tool: TOOL.PICKAXE, tier: TIER.IRON, drop: 'emerald' });
+
+// ---- 네더 ----
+B.SOUL_SAND = def('soul_sand', { display: '영혼 모래', all: 'soul_sand', hardness: 0.5, tool: TOOL.SHOVEL, stepSound: 'sand' });
+B.MAGMA_BLOCK = def('magma_block', { display: '마그마 블록', all: 'magma', hardness: 0.5, tool: TOOL.PICKAXE, tier: TIER.WOOD, light: 3 });
+B.NETHER_BRICKS = def('nether_bricks', { display: '네더 벽돌', all: 'nether_bricks', hardness: 2, tool: TOOL.PICKAXE, tier: TIER.WOOD });
+B.QUARTZ_ORE = def('nether_quartz_ore', { display: '네더 석영 광석', all: 'quartz_ore', hardness: 3, tool: TOOL.PICKAXE, tier: TIER.WOOD, drop: 'quartz' });
+B.NETHER_PORTAL = def('nether_portal', {
+    display: '네더 차원문', all: 'nether_portal', render: 'liquid', solid: false, opaque: false,
+    hardness: -1, light: 11, drop: null, placeable: false
+});
+B.FIRE = def('fire', {
+    display: '불', all: 'fire_tex', render: 'cross', solid: false, opaque: false,
+    hardness: 0, light: 15, drop: null, placeable: false, needsSupport: true
+});
+
+// ---- 엔드 ----
+B.END_STONE = def('end_stone', { display: '엔드 돌', all: 'end_stone', hardness: 3, tool: TOOL.PICKAXE, tier: TIER.WOOD });
+B.PURPUR = def('purpur_block', { display: '퍼퍼 블록', all: 'purpur', hardness: 1.5, tool: TOOL.PICKAXE, tier: TIER.WOOD });
+B.END_PORTAL_FRAME = def('end_portal_frame', {
+    display: '엔드 차원문 틀', top: 'end_frame_top', side: 'end_frame_side', bottom: 'end_stone',
+    hardness: -1, drop: null
+});
+B.END_PORTAL_FRAME_EYE = def('end_portal_frame_eye', {
+    display: '엔드 차원문 틀 (눈)', top: 'end_frame_eye', side: 'end_frame_side', bottom: 'end_stone',
+    hardness: -1, drop: null, light: 1, placeable: false
+});
+B.END_PORTAL = def('end_portal', {
+    display: '엔드 차원문', all: 'end_portal', render: 'cube', solid: false, opaque: false,
+    hardness: -1, light: 15, drop: null, placeable: false
+});
+
 B.FARMLAND = def('farmland', { display: '경작지', top: 'farmland', side: 'dirt', bottom: 'dirt', hardness: 0.6, tool: TOOL.SHOVEL, drop: 'dirt', stepSound: 'grass' });
 
 export function block(id) { return blocks[id]; }
@@ -230,6 +273,12 @@ item('bone', { display: '뼈', tex: 'item_bone' });
 item('feather', { display: '깃털', tex: 'item_feather' });
 item('gunpowder', { display: '화약', tex: 'item_gunpowder' });
 item('rotten_flesh', { display: '썩은 살점', tex: 'item_rotten', food: { hunger: 4, saturation: 0.8 } });
+
+item('flint', { display: '부싯돌', tex: 'item_flint' });
+item('flint_and_steel', { display: '부싯돌과 부시', tex: 'item_flint_steel', maxStack: 1, tool: null });
+item('ender_pearl', { display: '엔더 진주', tex: 'item_ender_pearl', maxStack: 16 });
+item('ender_eye', { display: '엔더의 눈', tex: 'item_ender_eye', maxStack: 16 });
+item('quartz', { display: '네더 석영', tex: 'item_quartz' });
 
 // 음식
 item('apple', { display: '사과', tex: 'item_apple', food: { hunger: 4, saturation: 2.4 } });
@@ -320,6 +369,10 @@ shaped('paper', 3, ['SSS'], { S: 'sugar_cane' });
 shaped('white_wool', 1, ['SS', 'SS'], { S: 'string' }, 2);
 shaped('tnt', 1, ['GSG', 'SGS', 'GSG'], { G: 'gunpowder', S: 'sand' });
 shaped('glowstone', 1, ['DD', 'DD'], { D: 'glowstone_dust' }, 2);
+shaped('flint_and_steel', 1, ['I.', '.F'], { I: 'iron_ingot', F: 'flint' }, 2);
+shapeless('ender_eye', 1, ['ender_pearl', 'glowstone_dust']);
+shaped('nether_bricks', 1, ['NN', 'NN'], { N: 'netherrack' }, 2);
+shaped('end_portal_frame', 1, ['EEE', 'E E', 'EEE'], { E: 'end_stone' });
 
 // 압축 블록 + 되돌리기
 for (const [ing, blk] of [['iron_ingot', 'iron_block'], ['gold_ingot', 'gold_block'], ['diamond', 'diamond_block'], ['coal', 'coal_block']]) {
@@ -375,7 +428,7 @@ export function matchRecipe(grid, size) {
                             const cell = grid[y * size + x] || null;
                             const inShape = y >= oy && y < oy + h && x >= ox && x < ox + w;
                             const ch = inShape ? (r.shape[y - oy][x - ox] ?? ' ') : ' ';
-                            const want = ch === ' ' ? null : r.key[ch];
+                            const want = (ch === ' ' || ch === '.') ? null : r.key[ch];
                             if (cell !== want) { ok = false; break; }
                         }
                     }

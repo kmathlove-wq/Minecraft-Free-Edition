@@ -1,8 +1,9 @@
 // ===== 월드 매니저: 청크 로드/언로드 · 블록 수정 · 레이캐스트 =====
 import * as THREE from 'three';
 import { Chunk, buildChunkMesh } from './chunk.js';
-import { WorldGen, CHUNK_SIZE, WORLD_HEIGHT, SEA_LEVEL, idx, BIOME_INFO } from './worldgen.js';
+import { WorldGen, CHUNK_SIZE, WORLD_HEIGHT, MIN_Y, MAX_Y, SEA_LEVEL, idx, BIOME_INFO } from './worldgen.js';
 import { AIR, B, IS_SOLID, IS_OPAQUE, BLOCKS_SKY, LIGHT_EMIT, blocks, RENDER_KIND } from './blocks.js';
+import { NetherGen, EndGen, DIMENSIONS } from './dimensions.js';
 
 const ckey = (cx, cz) => cx + ',' + cz;
 const DIRS = [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]];
@@ -10,17 +11,38 @@ const DIRS = [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1
 export class World {
     constructor(scene, seed = 1337) {
         this.scene = scene;
-        this.gen = new WorldGen(seed);
         this.seed = seed;
+        this.dimension = 'overworld';
+        this.gens = {
+            overworld: new WorldGen(seed),
+            nether: new NetherGen(seed),
+            end: new EndGen(seed)
+        };
+        this.gen = this.gens.overworld;
         this.chunks = new Map();
-        /** 플레이어 변경분: chunkKey -> Map(localKey -> blockId) */
-        this.mods = new Map();
+        /** 차원별 플레이어 변경분 */
+        this.modsByDim = { overworld: new Map(), nether: new Map(), end: new Map() };
+        this.mods = this.modsByDim.overworld;
         this.renderDistance = 6;
         this.genQueue = [];
         this.meshQueue = [];
         this._lastCx = null; this._lastCz = null;
         this._cCx = NaN; this._cCz = NaN; this._cChunk = null;
         this.stats = { chunks: 0, meshMs: 0, genMs: 0 };
+    }
+
+    /** 차원을 바꾼다. 지형은 시드에서 다시 생성되고, 변경분만 차원별로 보관된다. */
+    setDimension(name) {
+        if (!DIMENSIONS[name] || name === this.dimension) return DIMENSIONS[this.dimension];
+        for (const c of this.chunks.values()) c.dispose(this.scene);
+        this.chunks.clear();
+        this._invalidateCache();
+        this.dimension = name;
+        this.mods = this.modsByDim[name] ??= new Map();
+        this.gen = this.gens[name];
+        this.genQueue = [];
+        this._lastCx = null; this._lastCz = null;
+        return DIMENSIONS[name];
     }
 
     // ---------- 청크 접근 ----------
@@ -36,7 +58,7 @@ export class World {
     _invalidateCache() { this._cCx = NaN; this._cCz = NaN; this._cChunk = null; }
 
     getBlock(wx, wy, wz) {
-        if (wy < 0 || wy >= WORLD_HEIGHT) return AIR;
+        if (wy < MIN_Y || wy > MAX_Y) return AIR;
         const cx = wx >> 4, cz = wz >> 4;
         const c = this._chunkOf(cx, cz);
         if (!c || !c.generated) return AIR;
@@ -51,15 +73,15 @@ export class World {
     // chunk.light 는 상위 4비트=하늘빛, 하위 4비트=블록빛.
 
     getSkyLight(wx, wy, wz) {
-        if (wy >= WORLD_HEIGHT) return 15;
-        if (wy < 0) return 0;
+        if (wy > MAX_Y) return 15;
+        if (wy < MIN_Y) return 0;
         const cx = wx >> 4, cz = wz >> 4;
         const c = this._chunkOf(cx, cz);
         if (!c) return 15;
         return c.light[idx(wx - (cx << 4), wy, wz - (cz << 4))] >> 4;
     }
     getBlockLight(wx, wy, wz) {
-        if (wy < 0 || wy >= WORLD_HEIGHT) return 0;
+        if (wy < MIN_Y || wy > MAX_Y) return 0;
         const cx = wx >> 4, cz = wz >> 4;
         const c = this._chunkOf(cx, cz);
         if (!c) return 0;
@@ -71,7 +93,7 @@ export class World {
     }
 
     _setLight(wx, wy, wz, value, sky) {
-        if (wy < 0 || wy >= WORLD_HEIGHT) return false;
+        if (wy < MIN_Y || wy > MAX_Y) return false;
         const cx = wx >> 4, cz = wz >> 4;
         const c = this._chunkOf(cx, cz);
         if (!c || !c.generated) return false;
@@ -103,7 +125,7 @@ export class World {
             for (let d = 0; d < 6; d++) {
                 const dir = DIRS[d];
                 const nx = x + dir[0], ny = y + dir[1], nz = z + dir[2];
-                if (ny < 0 || ny >= WORLD_HEIGHT) continue;
+                if (ny < MIN_Y || ny > MAX_Y) continue;
                 const nb = this.getBlock(nx, ny, nz);
                 if (sky ? BLOCKS_SKY[nb] : IS_OPAQUE[nb]) continue;
                 // 하늘빛은 수직으로 내려갈 때 감쇠하지 않는다 (마인크래프트와 동일)
@@ -124,7 +146,7 @@ export class World {
             for (let d = 0; d < 6; d++) {
                 const dir = DIRS[d];
                 const nx = x + dir[0], ny = y + dir[1], nz = z + dir[2];
-                if (ny < 0 || ny >= WORLD_HEIGHT) continue;
+                if (ny < MIN_Y || ny > MAX_Y) continue;
                 const cur = sky ? this.getSkyLight(nx, ny, nz) : this.getBlockLight(nx, ny, nz);
                 if (cur === 0) continue;
                 const straightDown = sky && dir[1] === -1 && lvl === 15;
@@ -145,12 +167,12 @@ export class World {
         if (!c || !c.generated) return;
         const lx = wx - cx * CHUNK_SIZE, lz = wz - cz * CHUNK_SIZE;
 
-        let top = WORLD_HEIGHT - 1;
-        while (top >= 0 && !BLOCKS_SKY[c.data[idx(lx, top, lz)]]) top--;
+        let top = MAX_Y;
+        while (top >= MIN_Y && !BLOCKS_SKY[c.data[idx(lx, top, lz)]]) top--;
         top += 1;   // top 이상이 하늘에 직접 노출
 
         const addQ = [], remQ = [];
-        for (let y = 0; y < WORLD_HEIGHT; y++) {
+        for (let y = MIN_Y; y <= MAX_Y; y++) {
             const i = idx(lx, y, lz);
             const cur = c.light[i] >> 4;
             if (y >= top) {
@@ -174,8 +196,8 @@ export class World {
         const colTop = new Int16Array(CHUNK_SIZE * CHUNK_SIZE);
         for (let lz = 0; lz < CHUNK_SIZE; lz++) {
             for (let lx = 0; lx < CHUNK_SIZE; lx++) {
-                let y = WORLD_HEIGHT - 1;
-                for (; y >= 0; y--) {
+                let y = MAX_Y;
+                for (; y >= MIN_Y; y--) {
                     const i = idx(lx, y, lz);
                     if (BLOCKS_SKY[c.data[i]]) break;
                     c.light[i] = 15 << 4;
@@ -191,14 +213,14 @@ export class World {
                 for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
                     const nx = lx + dx, nz = lz + dz;
                     maxNb = Math.max(maxNb, (nx >= 0 && nx < CHUNK_SIZE && nz >= 0 && nz < CHUNK_SIZE)
-                        ? colTop[nz * CHUNK_SIZE + nx] : WORLD_HEIGHT);
+                        ? colTop[nz * CHUNK_SIZE + nx] : MAX_Y + 1);
                 }
                 for (let y = colTop[col]; y < maxNb; y++) skyQ.push(ox + lx, y, oz + lz);
             }
         }
 
         // 2) 이 청크 안의 광원
-        for (let y = 0; y <= c.maxY + 1 && y < WORLD_HEIGHT; y++)
+        for (let y = MIN_Y; y <= c.maxY + 1 && y <= MAX_Y; y++)
             for (let lz = 0; lz < CHUNK_SIZE; lz++)
                 for (let lx = 0; lx < CHUNK_SIZE; lx++) {
                     const i = idx(lx, y, lz);
@@ -210,14 +232,14 @@ export class World {
         for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
             const n = this.chunks.get(ckey(c.cx + dx, c.cz + dz));
             if (!n || !n.generated) continue;
-            const yTop = Math.min(WORLD_HEIGHT - 1, Math.max(n.maxY, c.maxY) + 2);
+            const yTop = Math.min(MAX_Y, Math.max(n.maxY, c.maxY) + 2);
             for (let t = 0; t < CHUNK_SIZE; t++) {
                 const nlx = dx === 1 ? 0 : dx === -1 ? CHUNK_SIZE - 1 : t;
                 const nlz = dz === 1 ? 0 : dz === -1 ? CHUNK_SIZE - 1 : t;
                 const clx = dx === 1 ? CHUNK_SIZE - 1 : dx === -1 ? 0 : t;
                 const clz = dz === 1 ? CHUNK_SIZE - 1 : dz === -1 ? 0 : t;
                 const wx = n.cx * CHUNK_SIZE + nlx, wz = n.cz * CHUNK_SIZE + nlz;
-                for (let y = 0; y <= yTop; y++) {
+                for (let y = MIN_Y; y <= yTop; y++) {
                     const L = n.light[idx(nlx, y, nlz)];
                     const M = c.light[idx(clx, y, clz)];
                     if ((L >> 4) > (M >> 4) + 1) skyQ.push(wx, y, wz);
@@ -279,7 +301,7 @@ export class World {
 
     /** 블록 설치/파괴. record=false 면 저장 대상에서 제외(월드 생성 중 사용) */
     setBlock(wx, wy, wz, id, record = true) {
-        if (wy < 0 || wy >= WORLD_HEIGHT) return false;
+        if (wy < MIN_Y || wy > MAX_Y) return false;
         const cx = Math.floor(wx / CHUNK_SIZE), cz = Math.floor(wz / CHUNK_SIZE);
         const c = this.chunks.get(ckey(cx, cz));
         if (!c || !c.generated) return false;
@@ -407,7 +429,7 @@ export class World {
         if (m) {
             for (const [lk, id] of m) {
                 const [lx, y, lz] = lk.split(',').map(Number);
-                if (y < 0 || y >= WORLD_HEIGHT) continue;
+                if (y < MIN_Y || y > MAX_Y) continue;
                 c.data[idx(lx, y, lz)] = id;
             }
             c.recomputeMaxY();
@@ -444,11 +466,19 @@ export class World {
             }
     }
 
+    setSeed(seed) {
+        this.seed = seed | 0;
+        this.gens.overworld = new WorldGen(this.seed);
+        this.gens.nether = new NetherGen(this.seed);
+        this.gens.end = new EndGen(this.seed);
+        this.gen = this.gens[this.dimension];
+    }
+
     clear() {
         for (const c of this.chunks.values()) c.dispose(this.scene);
         this.chunks.clear();
         this._invalidateCache();
-        this.mods.clear();
+        for (const m of Object.values(this.modsByDim)) m.clear();
         this.genQueue = [];
         this._lastCx = this._lastCz = null;
     }
@@ -458,7 +488,7 @@ export class World {
         const cx = Math.floor(wx / CHUNK_SIZE), cz = Math.floor(wz / CHUNK_SIZE);
         const c = this.chunks.get(ckey(cx, cz));
         if (c && c.generated) {
-            for (let y = WORLD_HEIGHT - 1; y > 0; y--) {
+            for (let y = MAX_Y; y > MIN_Y; y--) {
                 if (IS_SOLID[c.data[idx(wx - cx * CHUNK_SIZE, y, wz - cz * CHUNK_SIZE)]]) return y + 1;
             }
         }
@@ -508,10 +538,10 @@ export class World {
             const id = this.getBlock(x, y, z);
             if (id === AIR) continue;
             const def = blocks[id];
-            if (def.gravity && this.getBlock(x, y - 1, z) === AIR && y > 0) {
+            if (def.gravity && this.getBlock(x, y - 1, z) === AIR && y > MIN_Y) {
                 this.setBlock(x, y, z, AIR);
                 let ny = y - 1;
-                while (ny > 0 && this.getBlock(x, ny - 1, z) === AIR) ny--;
+                while (ny > MIN_Y && this.getBlock(x, ny - 1, z) === AIR) ny--;
                 this.setBlock(x, ny, z, id);
                 this.blockUpdate(x, y, z, depth + 1);
             } else if (def.needsSupport) {

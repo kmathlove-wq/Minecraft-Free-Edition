@@ -2,12 +2,16 @@
 import { B } from './blocks.js';
 
 export const CHUNK_SIZE = 16;
-export const WORLD_HEIGHT = 128;
+// 마인크래프트처럼 지하를 깊게 쓰기 위해 y = -64 ~ 191 을 사용한다.
+export const MIN_Y = -64;
+export const MAX_Y = 191;
+export const WORLD_HEIGHT = MAX_Y - MIN_Y + 1;   // 256
 export const SEA_LEVEL = 62;
+export const DEEPSLATE_Y = 0;                    // 이 아래는 심층암
 export const CHUNK_VOL = CHUNK_SIZE * WORLD_HEIGHT * CHUNK_SIZE;
 
-/** 청크 로컬 좌표 → 배열 인덱스 (y-major: 세로 스캔이 캐시 친화적) */
-export function idx(x, y, z) { return (y * CHUNK_SIZE + z) * CHUNK_SIZE + x; }
+/** 월드 y 를 그대로 받아 배열 인덱스로 바꾼다 (y-major: 세로 스캔이 캐시 친화적) */
+export function idx(x, wy, z) { return ((wy - MIN_Y) * CHUNK_SIZE + z) * CHUNK_SIZE + x; }
 
 // ---------- 노이즈 ----------
 function hash2(x, z, seed) {
@@ -70,6 +74,13 @@ export const BIOME_INFO = [
     { name: '사바나', grass: 0xbfb755, foliage: 0xaea42a, surface: 'grass', filler: 'dirt', trees: 0.012, plants: 0.25 }
 ];
 
+/** 일반 광석 → 심층암 광석 (y < 0 에서 사용) */
+const DEEPSLATE_ORE = {
+    [B.COAL_ORE]: B.DS_COAL_ORE, [B.IRON_ORE]: B.DS_IRON_ORE, [B.COPPER_ORE]: B.DS_COPPER_ORE,
+    [B.GOLD_ORE]: B.DS_GOLD_ORE, [B.REDSTONE_ORE]: B.DS_REDSTONE_ORE, [B.LAPIS_ORE]: B.DS_LAPIS_ORE,
+    [B.DIAMOND_ORE]: B.DS_DIAMOND_ORE, [B.EMERALD_ORE]: B.DS_EMERALD_ORE
+};
+
 export class WorldGen {
     constructor(seed = 1337) {
         this.seed = seed | 0;
@@ -86,12 +97,25 @@ export class WorldGen {
 
         // 대륙성(continentalness) 스플라인: 바다 / 해안 / 내륙을 뚜렷하게 나눈다
         let h, land;
-        if (cont < 0.28) { h = 26 + (cont / 0.28) * 32; land = 0; }
-        else if (cont < 0.36) { h = 58 + ((cont - 0.28) / 0.08) * 8; land = (cont - 0.28) / 0.08; }
+        if (cont < 0.28) {
+            // 깊은 바다: 해저 평원에서 해구까지
+            const t = cont / 0.28;
+            h = 24 + t * t * 34;                     // 24 ~ 58
+            land = 0;
+        } else if (cont < 0.36) { h = 58 + ((cont - 0.28) / 0.08) * 8; land = (cont - 0.28) / 0.08; }
         else { h = 66 + ((cont - 0.36) / 0.64) * 24; land = 1; }
 
         h += (hilly - 0.5) * 26 * land;
         h += (detail - 0.5) * 5 * (0.4 + 0.6 * land);
+
+        // 해저 지형: 언덕과 해구로 평평하지 않게 만든다
+        if (land < 1) {
+            const floor1 = fbm2(wx * 0.011, wz * 0.011, s + 313, 4);
+            const floor2 = fbm2(wx * 0.004, wz * 0.004, s + 727, 3);
+            const trench = Math.max(0, 1 - Math.abs(spread(floor2) - 0.5) * 6);   // 능선 형태의 해구
+            h += (floor1 - 0.5) * 22 * (1 - land);
+            h -= trench * trench * 16 * (1 - land);
+        }
 
         // 산악 마스크: 높은 지역을 더 높게 (능선)
         const m = Math.max(0, (mountain - 0.62) / 0.38) * land;
@@ -99,7 +123,7 @@ export class WorldGen {
             const ridge = 1 - Math.abs(hilly - 0.5) * 2;
             h += m * m * (30 + ridge * 34);
         }
-        return Math.max(3, Math.min(WORLD_HEIGHT - 6, Math.round(h)));
+        return Math.max(MIN_Y + 6, Math.min(MAX_Y - 6, Math.round(h)));
     }
 
     temperatureAt(wx, wz) { return spread(fbm2(wx * 0.0011, wz * 0.0011, this.seed + 4242, 3)); }
@@ -129,7 +153,7 @@ export class WorldGen {
         for (let y = 0; y < NY; y++)
             for (let z = 0; z < NX; z++)
                 for (let x = 0; x < NX; x++, i++) {
-                    const wx = cx * CHUNK_SIZE + x * S, wy = y * S, wz = cz * CHUNK_SIZE + z * S;
+                    const wx = cx * CHUNK_SIZE + x * S, wy = MIN_Y + y * S, wz = cz * CHUNK_SIZE + z * S;
                     a[i] = noise3(wx * 0.028, wy * 0.05, wz * 0.028, this.seed + 11);
                     b[i] = noise3(wx * 0.028, wy * 0.05, wz * 0.028, this.seed + 29);
                     c[i] = noise3(wx * 0.014, wy * 0.02, wz * 0.014, this.seed + 47);
@@ -138,7 +162,7 @@ export class WorldGen {
     }
     static _sample(f, arr, x, y, z) {
         const S = f.S, NX = f.NX;
-        const gx = x / S, gy = y / S, gz = z / S;
+        const gx = x / S, gy = (y - MIN_Y) / S, gz = z / S;
         const ix = gx | 0, iy = gy | 0, iz = gz | 0;
         const fx = gx - ix, fy = gy - iy, fz = gz - iz;
         const at = (X, Y, Z) => arr[(Y * NX + Z) * NX + X];
@@ -178,22 +202,22 @@ export class WorldGen {
                 if (underwater) { surface = hash2(wx, wz, this.seed + 3) < 0.25 ? B.GRAVEL : B.SAND; filler = surface; }
                 if (biome === BIOME.MOUNTAINS && h > 108) { surface = B.SNOW_BLOCK; filler = B.STONE; }
 
-                for (let y = 0; y <= h; y++) {
+                for (let y = MIN_Y; y <= h; y++) {
                     let blk;
-                    if (y === 0 || y <= 1 + (hash2(wx * 3 + y, wz * 5, bedrockSeed) * 3 | 0)) blk = B.BEDROCK;
+                    if (y === MIN_Y || y <= MIN_Y + 1 + (hash2(wx * 3 + y, wz * 5, bedrockSeed) * 3 | 0)) blk = B.BEDROCK;
                     else if (y === h) blk = surface;
                     else if (y >= h - 3) blk = filler === B.SAND && y < h - 1 ? B.SANDSTONE : filler;
-                    else blk = B.STONE;
+                    else blk = y < DEEPSLATE_Y ? B.DEEPSLATE : B.STONE;
 
                     // 동굴 파내기
-                    if (blk !== B.BEDROCK && y > 4 && y < h - 1) {
+                    if (blk !== B.BEDROCK && y > MIN_Y + 4 && y < h - 1) {
                         const safeUnderSea = underwater && y > h - 6;
                         if (!safeUnderSea) {
                             const na = WorldGen._sample(cave, cave.a, lx, y, lz) - 0.5;
                             const nb = WorldGen._sample(cave, cave.b, lx, y, lz) - 0.5;
                             const nc = WorldGen._sample(cave, cave.c, lx, y, lz);
-                            const tunnel = Math.abs(na) < 0.085 && Math.abs(nb) < 0.085;
-                            const cheese = y < 46 && nc > 0.78;
+                            const tunnel = Math.abs(na) < 0.055 && Math.abs(nb) < 0.055;
+                            const cheese = y < 8 && nc > 0.83;
                             if (tunnel || cheese) blk = B.AIR;
                         }
                     }
@@ -216,13 +240,13 @@ export class WorldGen {
     // ---- 광석 ----
     _ores(cx, cz, data) {
         const veins = [
-            [B.COAL_ORE, 20, 17, 6, 120],
-            [B.IRON_ORE, 20, 9, 5, 64],
+            [B.COAL_ORE, 20, 17, 0, 128],
+            [B.IRON_ORE, 20, 9, -24, 64],
             [B.COPPER_ORE, 12, 10, 28, 76],
-            [B.GOLD_ORE, 2, 9, 5, 32],
-            [B.REDSTONE_ORE, 8, 8, 5, 16],
-            [B.LAPIS_ORE, 1, 7, 5, 32],
-            [B.DIAMOND_ORE, 1, 8, 5, 16],
+            [B.GOLD_ORE, 4, 9, -48, 32],
+            [B.REDSTONE_ORE, 10, 8, -60, 16],
+            [B.LAPIS_ORE, 2, 7, -32, 32],
+            [B.DIAMOND_ORE, 3, 8, -60, 12],
             [B.EMERALD_ORE, 3, 2, 40, 110]
         ];
         let r = (cx * 341873128 + cz * 132897987 + this.seed) | 0;
@@ -232,12 +256,14 @@ export class WorldGen {
             for (let v = 0; v < count; v++) {
                 if (blk === B.EMERALD_ORE && rnd() > 0.25) continue;
                 let x = (rnd() * CHUNK_SIZE) | 0;
-                let y = yMin + ((rnd() * (yMax - yMin)) | 0);
+        let y = yMin + ((rnd() * (yMax - yMin)) | 0);
                 let z = (rnd() * CHUNK_SIZE) | 0;
                 for (let i = 0; i < size; i++) {
-                    if (x >= 0 && x < CHUNK_SIZE && z >= 0 && z < CHUNK_SIZE && y > 1 && y < WORLD_HEIGHT) {
+                    if (x >= 0 && x < CHUNK_SIZE && z >= 0 && z < CHUNK_SIZE && y > MIN_Y + 2 && y <= MAX_Y) {
                         const k = idx(x, y, z);
+                        // 심층암 구간에서는 심층암 광석으로 바뀐다
                         if (data[k] === B.STONE) data[k] = blk;
+                        else if (data[k] === B.DEEPSLATE) data[k] = DEEPSLATE_ORE[blk] ?? blk;
                     }
                     const d = (rnd() * 6) | 0;
                     if (d === 0) x++; else if (d === 1) x--; else if (d === 2) y++;
@@ -256,7 +282,7 @@ export class WorldGen {
         const set = (wx, wy, wz, blk, replace = false) => {
             const lx = wx - cx * CHUNK_SIZE, lz = wz - cz * CHUNK_SIZE;
             if (lx < 0 || lz < 0 || lx >= CHUNK_SIZE || lz >= CHUNK_SIZE) return;
-            if (wy < 0 || wy >= WORLD_HEIGHT) return;
+            if (wy < MIN_Y || wy > MAX_Y) return;
             const k = idx(lx, wy, lz);
             if (!replace && data[k] !== B.AIR && data[k] !== B.WATER) return;
             data[k] = blk;

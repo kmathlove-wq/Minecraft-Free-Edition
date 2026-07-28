@@ -4,7 +4,7 @@
 import { B, blocks } from './blocks.js';
 
 const KEY = 'minecraft_saves';
-export const SAVE_VERSION = 3;
+export const SAVE_VERSION = 4;
 
 // 구버전 v2 의 색상 → 신 블록 id
 const LEGACY_COLOR = new Map([
@@ -35,15 +35,19 @@ export function renameSave(id, name) {
 
 /** 게임 상태를 직렬화 */
 export function serialize(game, name, id) {
-    const mods = {};
-    for (const [ckey, m] of game.world.mods) {
-        if (m.size === 0) continue;
-        const list = [];
-        for (const [lk, blockId] of m) {
-            const [lx, y, lz] = lk.split(',');
-            list.push(+lx, +y, +lz, blockId);
+    const dims = {};
+    for (const [dim, dimMods] of Object.entries(game.world.modsByDim)) {
+        const mods = {};
+        for (const [ckey, m] of dimMods) {
+            if (m.size === 0) continue;
+            const list = [];
+            for (const [lk, blockId] of m) {
+                const [lx, y, lz] = lk.split(',');
+                list.push(+lx, +y, +lz, blockId);
+            }
+            mods[ckey] = list;
         }
-        mods[ckey] = list;
+        if (Object.keys(mods).length) dims[dim] = mods;
     }
     const p = game.player;
     return {
@@ -61,7 +65,8 @@ export function serialize(game, name, id) {
             spawn: { ...p.spawn }, flying: p.flying
         },
         inventory: game.inventory.toJSON(),
-        mods
+        dimension: game.world.dimension,
+        dims
     };
 }
 
@@ -85,13 +90,20 @@ export function applySave(game, data) {
     game.mobs.clear();
 
     if (data.version >= 3) {
-        game.world.seed = data.seed ?? 1337;
-        game.world.gen.seed = game.world.seed | 0;
-        for (const [ckey, list] of Object.entries(data.mods || {})) {
-            const m = new Map();
-            for (let i = 0; i < list.length; i += 4) m.set(`${list[i]},${list[i + 1]},${list[i + 2]}`, list[i + 3]);
-            game.world.mods.set(ckey, m);
+        game.world.setSeed(data.seed ?? 1337);
+        // v4: 차원별 변경분 / v3: 오버월드만
+        const dimData = data.version >= 4 ? (data.dims || {}) : { overworld: data.mods || {} };
+        for (const [dim, mods] of Object.entries(dimData)) {
+            const target = game.world.modsByDim[dim];
+            if (!target) continue;
+            for (const [ckey, list] of Object.entries(mods)) {
+                const m = new Map();
+                for (let i = 0; i < list.length; i += 4) m.set(`${list[i]},${list[i + 1]},${list[i + 2]}`, list[i + 3]);
+                target.set(ckey, m);
+            }
         }
+        game.world.setDimension(data.dimension || 'overworld');
+        game.sky.setDimension(game.world.dimension);
         game.inventory.fromJSON(data.inventory);
         game.sky.setTime(data.time ?? 1000);
         const p = data.player;
@@ -106,6 +118,8 @@ export function applySave(game, data) {
         game.player.spawn = p.spawn ?? { ...p.pos };
         game.player.flying = !!p.flying && game.player.gamemode === 'creative';
     } else {
+        game.world.setDimension('overworld');
+        game.sky.setDimension('overworld');
         // ---- 구버전 v2 ----
         for (const mod of (data.mods || [])) {
             const wx = Math.round(mod.p.x), wy = Math.round(mod.p.y), wz = Math.round(mod.p.z);

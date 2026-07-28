@@ -3,7 +3,7 @@
 import { items, itemOf, blocks, blockByNameOf, B } from './blocks.js';
 import { MOB_TYPES } from './mobs.js';
 import { DAY_TICKS } from './env.js';
-import { WORLD_HEIGHT } from './worldgen.js';
+import { WORLD_HEIGHT, MIN_Y, MAX_Y } from './worldgen.js';
 import { stack } from './inventory.js';
 import { sfx } from './audio.js';
 
@@ -175,7 +175,7 @@ export const COMMANDS = {
             const y = coord(args[1], p.pos.y);
             const z = coord(args[2], p.pos.z);
             game.world.forceLoad(x, z, 1);
-            p.pos = { x, y: Math.max(-30, Math.min(WORLD_HEIGHT + 60, y)), z };
+            p.pos = { x, y: Math.max(MIN_Y - 20, Math.min(MAX_Y + 60, y)), z };
             p.vel = { x: 0, y: 0, z: 0 };
             p.fallStart = null;
             con.log(`이동: ${x.toFixed(1)}, ${y.toFixed(1)}, ${z.toFixed(1)}`);
@@ -329,6 +329,24 @@ export const COMMANDS = {
             if (!on) game.mobs.clear();
             con.log('몹 생성: ' + (on ? '켜짐' : '꺼짐'));
         }
+    },
+    dimension: {
+        usage: '/dimension <overworld|nether|end>',
+        desc: '차원 이동 (네더 / 엔드)',
+        run(game, args, con) {
+            const map = { overworld: 'overworld', o: 'overworld', 오버월드: 'overworld',
+                          nether: 'nether', n: 'nether', 네더: 'nether',
+                          end: 'end', e: 'end', 엔드: 'end' };
+            const to = map[(args[0] || '').toLowerCase()];
+            if (!to) throw new Error('사용법: /dimension <overworld|nether|end>');
+            if (to === game.world.dimension) { con.log('이미 그 차원에 있습니다.'); return; }
+            game.switchDimension(to);
+        }
+    },
+    dim: {
+        usage: '/dim <o|n|e>',
+        desc: '/dimension 축약',
+        run: (g, a, c) => COMMANDS.dimension.run(g, a, c)
     },
     pos: {
         usage: '/pos',

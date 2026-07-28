@@ -151,6 +151,7 @@ canvas { display: block; }
     max-height: 92vh; overflow-y: auto;
 }
 #gui-panel h3 { margin: 0 0 10px; font-size: 16px; }
+.gui-hint { margin: 8px 0 2px; font-size: 11px; color: #6b6b6b; }
 #gui-panel .sep { height: 10px; }
 .grid { display: grid; grid-template-columns: repeat(9, 44px); gap: 2px; }
 .inv-grid { grid-template-columns: repeat(9, 44px); }
@@ -194,11 +195,12 @@ canvas { display: block; }
 #cursor-item .durbar { display: none; }
 
 /* ---------- 화면 효과 ---------- */
-#water-overlay, #damage-overlay {
+#water-overlay, #damage-overlay, #portal-overlay {
     position: fixed; inset: 0; pointer-events: none; z-index: 6;
     opacity: 0; transition: opacity .2s;
 }
 #water-overlay { background: rgba(40, 90, 200, .55); }
+#portal-overlay { background: rgba(110, 40, 170, .75); }
 #damage-overlay { background: radial-gradient(circle, transparent 30%, rgba(160,0,0,.8) 100%); }
 
 /* ---------- 디버그 ---------- */

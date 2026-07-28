@@ -55,6 +55,13 @@ export class UI {
         this.guiPanel = document.getElementById('gui-panel');
         this.cursorEl = document.getElementById('cursor-item');
 
+        document.addEventListener('mouseup', () => {
+            const d = this._drag;
+            this._drag = null;
+            if (!d) return;
+            if (d.slots.length <= 1) this._click(d.slots[0], d.button);   // 제자리 클릭
+            else this._distribute(d);
+        });
         document.addEventListener('mousemove', (e) => {
             if (!this.open) return;
             this.cursorEl.style.left = e.clientX + 'px';
@@ -121,6 +128,8 @@ export class UI {
             craftRow.appendChild(this._slotEl({ area: 'output' }));
         }
 
+        const hint = $('div', 'gui-hint', p);
+        hint.textContent = '좌클릭 전부 · 우클릭 반/한 개 · Shift+클릭 빠른 이동 · 누른 채 끌기 나눠담기';
         if (kind !== 'creative') $('div', 'sep', p);
         // 인벤토리 본체 (27) + 핫바 (9)
         const main = $('div', 'grid inv-grid', p);
@@ -139,8 +148,24 @@ export class UI {
         const d = $('div', 'durbar', el);
         $('div', 'durfill', d);
         el._desc = desc;
-        el.addEventListener('mousedown', (e) => { e.preventDefault(); this._click(desc, e.button); });
-        el.addEventListener('mouseenter', () => { this._hover(desc, el); });
+        el.addEventListener('mousedown', (e) => {
+            e.preventDefault();
+            if (e.shiftKey) { this._quickMove(desc); return; }
+            // 아이템을 든 채 누르면 드래그 분배를 시작한다.
+            // 끌지 않고 그대로 떼면 일반 클릭으로 처리한다.
+            if (this.game.inventory.cursor && desc.area !== 'output' && desc.area !== 'creative') {
+                this._drag = { mode: e.button === 2 ? 'one' : 'even', slots: [desc], button: e.button };
+                return;
+            }
+            this._click(desc, e.button);
+        });
+        el.addEventListener('mouseenter', () => {
+            this._hover(desc, el);
+            if (this._drag && !this._drag.slots.includes(desc)
+                && desc.area !== 'output' && desc.area !== 'creative') {
+                this._drag.slots.push(desc);
+            }
+        });
         el.addEventListener('mouseleave', () => { this.itemName.style.opacity = 0; });
         if (!this._slotEls) this._slotEls = [];
         this._slotEls.push(el);
@@ -236,6 +261,95 @@ export class UI {
                 if (slot.count <= 0) this._set(d, null);
             } else { inv.cursor = slot; this._set(d, null); }
         }
+        this._refreshScreen();
+    }
+
+    /** Shift+클릭: 인벤토리 ↔ 핫바 ↔ 제작칸 사이로 스택을 통째로 옮긴다 */
+    _quickMove(d) {
+        const inv = this.game.inventory;
+        const src = this._get(d);
+        if (!src || d.area === 'creative') {
+            if (d.area === 'creative') { inv.add(d.id, itemOf(d.id).maxStack); this._refreshScreen(); }
+            return;
+        }
+        if (d.area === 'output') {   // 결과칸은 만들 수 있는 만큼 계속 만든다
+            let made = null, guard = 0;
+            while ((made = inv.takeCraft()) && guard++ < 64) {
+                if (inv.add(made.id, made.count) > 0) break;
+            }
+            sfx.craft();
+            this._refreshScreen();
+            return;
+        }
+        this._set(d, null);
+        let left;
+        if (d.area === 'inv') {
+            // 핫바(0~8) ↔ 인벤토리(9~35) 로 반대편에 넣는다
+            const toHotbar = d.index >= HOTBAR;
+            left = this._addRange(src, toHotbar ? 0 : HOTBAR, toHotbar ? HOTBAR : MAIN_SLOTS);
+        } else {
+            left = inv.add(src.id, src.count);
+        }
+        if (left > 0) this._set(d, stack(src.id, left));
+        sfx.click();
+        this._refreshScreen();
+    }
+
+    _addRange(src, from, to) {
+        const inv = this.game.inventory;
+        const max = itemOf(src.id).maxStack;
+        let n = src.count;
+        if (src.dur === undefined) {
+            for (let i = from; i < to && n > 0; i++) {
+                const s = inv.slots[i];
+                if (s && s.id === src.id && s.dur === undefined && s.count < max) {
+                    const move = Math.min(max - s.count, n);
+                    s.count += move; n -= move;
+                }
+            }
+        }
+        for (let i = from; i < to && n > 0; i++) {
+            if (inv.slots[i]) continue;
+            const move = Math.min(max, n);
+            inv.slots[i] = { id: src.id, count: move, dur: src.dur };
+            n -= move;
+        }
+        return n;
+    }
+
+    /**
+     * 드래그로 지나간 칸들에 아이템을 나눠 담는다.
+     *  - 좌클릭 드래그: 균등 분배 (마인크래프트와 동일)
+     *  - 우클릭 드래그: 칸마다 한 개씩
+     */
+    _distribute(drag) {
+        const inv = this.game.inventory;
+        const cur = inv.cursor;
+        if (!cur) return;
+
+        // 실제로 담을 수 있는 칸만 추린다
+        const targets = drag.slots.filter(d => {
+            const s = this._get(d);
+            if (!s) return true;
+            return s.id === cur.id && s.dur === undefined && s.count < itemOf(s.id).maxStack;
+        });
+        if (targets.length === 0) return;
+
+        const max = itemOf(cur.id).maxStack;
+        const per = drag.mode === 'one' ? 1 : Math.max(1, Math.floor(cur.count / targets.length));
+
+        for (const d of targets) {
+            if (cur.count <= 0) break;
+            const s = this._get(d);
+            const room = s ? max - s.count : max;
+            const n = Math.min(per, cur.count, room);
+            if (n <= 0) continue;
+            if (s) s.count += n;
+            else this._set(d, stack(cur.id, n));
+            cur.count -= n;
+        }
+        if (cur.count <= 0) inv.cursor = null;
+        sfx.click();
         this._refreshScreen();
     }
 
